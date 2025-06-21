@@ -61,7 +61,7 @@ def handle_incoming_call(self, request):
     response.record(
         action=f'/twilio/recording/{call.id}/',
         max_length=30,
-        play_beep=False,
+        play_beep=True,
         trim='trim-silence'
     )
 ```

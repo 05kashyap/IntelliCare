@@ -13,6 +13,7 @@ from django.conf import settings
 from django.http import JsonResponse, HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
+from django.utils import timezone
 from twilio.twiml.voice_response import VoiceResponse
 from twilio.rest import Client
 from .models import Call
@@ -44,14 +45,14 @@ class LocalRecordingStorage:
             
             if audio_response and audio_response.status_code == 200:
                 # Generate filename with timestamp and call info
-                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                timestamp = timezone.now().strftime('%Y%m%d_%H%M%S')
                 file_extension = self._get_file_extension(audio_response.headers.get('content-type', 'audio/wav'))
                 
                 # Create filename: call_YYYYMMDD_HHMMSS_callid.ext
                 filename = f"call_{timestamp}_{str(call_id)[:8]}{file_extension}"
                 
                 # Store in daily directory (organize by date)
-                date_dir = os.path.join(self.daily_dir, datetime.now().strftime('%Y-%m-%d'))
+                date_dir = os.path.join(self.daily_dir, timezone.now().strftime('%Y-%m-%d'))
                 os.makedirs(date_dir, exist_ok=True)
                 
                 file_path = os.path.join(date_dir, filename)
@@ -76,7 +77,7 @@ class LocalRecordingStorage:
                     'file_size': len(audio_response.content),
                     'content_type': audio_response.headers.get('content-type', 'audio/wav'),
                     'md5_hash': audio_hash,
-                    'stored_at': datetime.now().isoformat(),
+                    'stored_at': timezone.now().isoformat(),
                     'call_id': str(call_id),
                     'call_sid': call_sid
                 }
@@ -176,7 +177,7 @@ class LocalRecordingStorage:
     def archive_old_recordings(self, days_old=30):
         """Move recordings older than specified days to archive"""
         try:
-            cutoff_date = datetime.now() - timedelta(days=days_old)
+            cutoff_date = timezone.now() - timedelta(days=days_old)
             archived_count = 0
             
             for root, dirs, files in os.walk(self.daily_dir):
@@ -327,7 +328,7 @@ class TwilioVoiceService:
             phone_number=caller_number,
             twilio_call_sid=call_sid,
             status='in_progress',
-            start_time=datetime.now(),
+            start_time=timezone.now(),
             caller_city=request.POST.get('FromCity', ''),
             caller_state=request.POST.get('FromState', ''),
             caller_country=request.POST.get('FromCountry', '')
@@ -347,7 +348,7 @@ class TwilioVoiceService:
             method='POST',
             max_length=30,  # 30 seconds max per recording
             timeout=3,  # Finish recording after 3 seconds of silence
-            play_beep=False,
+            play_beep=True,
             trim='trim-silence',
             recording_status_callback=f'/twilio/recording-status/{call.id}/',
             recording_status_callback_method='POST'
@@ -411,20 +412,29 @@ class TwilioVoiceService:
                     'chunk_id': str(recording_chunk.id) if recording_chunk else None,
                     'chunk_number': chunk_number,
                     'local_path': recording_chunk.local_recording_path if recording_chunk else None,
-                    'timestamp': datetime.now().isoformat()
+                    'timestamp': timezone.now().isoformat()
                 })
             
             # Wait for Sarvam AI response - pass recording URL for processing
             print(f"=== Calling wait_for_ai_response for call {call_id} ===")
-            response_audio_url = self.wait_for_ai_response(call_id, recording_url)
-            print(f"=== wait_for_ai_response returned: {response_audio_url} ===")
+            ai_response = self.wait_for_ai_response(call_id, recording_url)
+            print(f"=== wait_for_ai_response returned: {ai_response} ===")
+            
+            # Handle different response formats for backward compatibility
+            if isinstance(ai_response, dict):
+                response_audio_url = ai_response.get("url")
+                should_end = ai_response.get("should_end", False)
+            else:
+                # Backward compatibility with old format
+                response_audio_url = ai_response
+                should_end = False
             
             if response_audio_url:
                 # Update recording chunk with response info
                 if recording_chunk:
                     recording_chunk.response_audio_url = response_audio_url
                     recording_chunk.processed = True
-                    recording_chunk.processed_at = datetime.now()
+                    recording_chunk.processed_at = timezone.now()
                     recording_chunk.save()
                 
                 # Play the AI response audio file
@@ -435,17 +445,25 @@ class TwilioVoiceService:
                     recording_chunk.response_played = True
                     recording_chunk.save()
                 
-                # After playing response, start recording again for continuous conversation
-                response.record(
-                    action=f'/twilio/recording/{call.id}/',
-                    method='POST',
-                    max_length=30,
-                    timeout=3,  # Finish recording after 3 seconds of silence
-                    play_beep=False,
-                    trim='trim-silence',
-                    recording_status_callback=f'/twilio/recording-status/{call.id}/',
-                    recording_status_callback_method='POST'
-                )
+                # Check if conversation should end
+                if should_end:
+                    print(f"AI indicated conversation should end for call {call_id}")
+                    # End the call and mark as completed
+                    self._end_call_and_mark_completed(call_id, call_sid)
+                    # Return hangup response
+                    response.hangup()
+                else:
+                    # After playing response, start recording again for continuous conversation
+                    response.record(
+                        action=f'/twilio/recording/{call.id}/',
+                        method='POST',
+                        max_length=30,
+                        timeout=3,  # Finish recording after 3 seconds of silence
+                        play_beep=True,
+                        trim='trim-silence',
+                        recording_status_callback=f'/twilio/recording-status/{call.id}/',
+                        recording_status_callback_method='POST'
+                    )
             else:
                 # If no response available (could be AI decided not to respond to silence), continue recording anyway
                 print(f"No AI response available, continuing to listen...")
@@ -454,7 +472,7 @@ class TwilioVoiceService:
                     method='POST',
                     max_length=30,
                     timeout=3,  # Finish recording after 3 seconds of silence
-                    play_beep=False,
+                    play_beep=True,
                     trim='trim-silence',
                     recording_status_callback=f'/twilio/recording-status/{call.id}/',
                     recording_status_callback_method='POST'
@@ -467,7 +485,7 @@ class TwilioVoiceService:
                 method='POST',
                 max_length=30,
                 timeout=3,  # Finish recording after 3 seconds of silence
-                play_beep=False,
+                play_beep=True,
                 trim='trim-silence',
             )
         except Exception as e:
@@ -478,7 +496,7 @@ class TwilioVoiceService:
                 method='POST',
                 max_length=30,
                 timeout=3,  # Finish recording after 3 seconds of silence
-                play_beep=False,
+                play_beep=True,
                 trim='trim-silence',
             )
         
@@ -499,40 +517,44 @@ class TwilioVoiceService:
                 print(f"=== Download result: {local_audio_path} ===")
                 if not local_audio_path:
                     print(f"FALLBACK TRIGGERED: Failed to download audio for call {call_id}")
-                    return self._get_fallback_response()
+                    return {"url": self._get_fallback_response(), "should_end": False}
             else:
                 print(f"FALLBACK TRIGGERED: No recording URL provided for call {call_id}")
-                return self._get_fallback_response()
+                return {"url": self._get_fallback_response(), "should_end": False}
             
             # Process with Sarvam AI
             print(f"=== Starting Sarvam AI processing ===")
             print(f"Processing audio with Sarvam AI...")
-            response_audio_path = self._process_with_sarvam_ai(local_audio_path, call_id)
-            print(f"=== Sarvam AI processing returned: {response_audio_path} ===")
+            sarvam_result = self._process_with_sarvam_ai(local_audio_path, call_id)
+            print(f"=== Sarvam AI processing returned: {sarvam_result} ===")
             
-            if response_audio_path and os.path.exists(response_audio_path):
+            if sarvam_result and sarvam_result.get("path") and os.path.exists(sarvam_result["path"]):
                 print(f"Sarvam AI processing completed successfully")
                 # Move response to media/outputs directory and return URL
-                response_url = self._save_response_to_media(response_audio_path, call_id)
+                response_url = self._save_response_to_media(sarvam_result["path"], call_id)
                 print(f"=== Media save returned: {response_url} ===")
                 if response_url:
                     print(f"=== AI processing SUCCESS for call {call_id} ===")
                     print(f"Response URL: {response_url}")
-                    return response_url
+                    # Check if conversation should end
+                    if sarvam_result.get("should_end"):
+                        return {"url": response_url, "should_end": True}
+                    return {"url": response_url, "should_end": False}
                 else:
                     print(f"FALLBACK TRIGGERED: Failed to save response to media for call {call_id}")
-                    return self._get_fallback_response()
+                    return {"url": self._get_fallback_response(), "should_end": False}
             else:
                 print(f"Sarvam AI processing failed for call {call_id}")
-                print(f"Response path: {response_audio_path}")
-                print(f"Path exists: {os.path.exists(response_audio_path) if response_audio_path else 'N/A'}")
-                return self._get_fallback_response()
+                response_path = sarvam_result.get("path") if sarvam_result else None
+                print(f"Response path: {response_path}")
+                print(f"Path exists: {os.path.exists(response_path) if response_path else 'N/A'}")
+                return {"url": self._get_fallback_response(), "should_end": False}
                 
         except Exception as e:
             print(f"Error processing audio with Sarvam AI: {e}")
             import traceback
             traceback.print_exc()
-            return self._get_fallback_response()
+            return {"url": self._get_fallback_response(), "should_end": False}
     
     def _download_audio_for_processing(self, recording_url, call_id):
         """Download audio from Twilio for Sarvam AI processing"""
@@ -545,7 +567,7 @@ class TwilioVoiceService:
             
             if audio_response and audio_response.status_code == 200:
                 # Create temporary file for processing
-                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                timestamp = timezone.now().strftime('%Y%m%d_%H%M%S')
                 filename = f"input_{timestamp}_{str(call_id)[:8]}.wav"
                 
                 # Save to a processing directory
@@ -594,7 +616,7 @@ class TwilioVoiceService:
             conversation = self._get_conversation_state(call_id)
             
             # Generate output file path with call ID for matching
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            timestamp = timezone.now().strftime('%Y%m%d_%H%M%S')
             output_filename = f"response_{timestamp}_{str(call_id)[:8]}.wav"
             
             # Save to processing directory first
@@ -631,19 +653,19 @@ class TwilioVoiceService:
                 # Check if conversation should end
                 if result["should_end"]:
                     print(f"Conversation ending for call {call_id}")
-                    # You might want to handle call ending here
+                    return {"path": response_path, "should_end": True}
                 
-                return response_path
+                return {"path": response_path, "should_end": False}
             else:
                 print(f"Sarvam AI processing failed for call {call_id}: {result.get('error', 'Unknown error')}")
                 # Return None to trigger fallback response
-                return None
+                return {"path": None, "should_end": False}
                 
         except Exception as e:
             print(f"Error processing with Sarvam AI: {e}")
             import traceback
             traceback.print_exc()
-            return None
+            return {"path": None, "should_end": False}
     
     def _get_conversation_state(self, call_id):
         """Get conversation state for a call"""
@@ -733,7 +755,7 @@ class TwilioVoiceService:
             os.makedirs(outputs_dir, exist_ok=True)
             
             # Create unique filename for this response with call ID
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            timestamp = timezone.now().strftime('%Y%m%d_%H%M%S')
             filename = f"response_{timestamp}_{str(call_id)[:8]}.wav"
             media_path = os.path.join(outputs_dir, filename)
             
@@ -802,7 +824,7 @@ class TwilioVoiceService:
             method='POST',
             max_length=30,
             timeout=3,  # Finish recording after 3 seconds of silence
-            play_beep=False,
+            play_beep=True,
             trim='trim-silence',
             recording_status_callback=f'/twilio/recording-status/{call_id}/',
             recording_status_callback_method='POST'
@@ -820,7 +842,7 @@ class TwilioVoiceService:
             method='POST',
             max_length=30,
             timeout=3,  # Finish recording after 3 seconds of silence
-            play_beep=False,
+            play_beep=True,
             trim='trim-silence',
             recording_status_callback=f'/twilio/recording-status/{call_id}/',
             recording_status_callback_method='POST'
@@ -880,6 +902,44 @@ class TwilioVoiceService:
         except Exception as e:
             print(f"Error ending call: {e}")
             return False
+    
+    def _end_call_and_mark_completed(self, call_id, call_sid):
+        """End the call and mark it as completed in the database"""
+        try:
+            # Update call status in database
+            call = Call.objects.get(id=call_id)
+            call.status = 'completed'
+            call.end_time = timezone.now()
+            if call.start_time:
+                call.duration = call.end_time - call.start_time
+            call.save()
+            
+            print(f"Call {call_id} marked as completed in database")
+            
+            # End the Twilio call
+            if call_sid and hasattr(self, 'client'):
+                try:
+                    self.client.calls(call_sid).update(status='completed')
+                    print(f"Twilio call {call_sid} ended successfully")
+                except Exception as e:
+                    print(f"Error ending Twilio call {call_sid}: {e}")
+                    # Continue anyway since the database is updated
+            
+            # Clean up tracking
+            if call_sid in self.active_calls:
+                del self.active_calls[call_sid]
+                print(f"Removed call {call_sid} from active calls tracking")
+                
+            return True
+            
+        except Call.DoesNotExist:
+            print(f"Call {call_id} not found in database")
+            return False
+        except Exception as e:
+            print(f"Error ending call {call_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
 
 
 # Webhook view functions for Twilio
@@ -930,7 +990,7 @@ def twilio_status_webhook(request):
         
         if call_status == 'completed':
             call.status = 'completed'
-            call.end_time = datetime.now()
+            call.end_time = timezone.now()
             if call.start_time:
                 call.duration = call.end_time - call.start_time
             

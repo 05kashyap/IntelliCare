@@ -26,6 +26,7 @@ urlpatterns = [
     # Dashboard API endpoints (public)
     path('api/dashboard/', include(dashboard_router.urls)),
     path('api/dashboard/stats/', views.dashboard_stats, name='dashboard_stats'),
+    path('api/dashboard/historical/', views.dashboard_historical_data, name='dashboard_historical'),
     
     # Twilio webhooks
     path('twilio/voice/', views.twilio_voice_webhook, name='twilio_voice_webhook'),

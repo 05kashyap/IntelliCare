@@ -318,6 +318,99 @@ def dashboard_stats(request):
     
     return JsonResponse(stats)
 
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def dashboard_historical_data(request):
+    """Get historical data for dashboard charts"""
+    from django.db.models import Count, Avg
+    from datetime import datetime, timedelta
+    
+    # Get date range from query params (default to last 7 days)
+    days = int(request.GET.get('days', 7))
+    end_date = datetime.now().date()
+    start_date = end_date - timedelta(days=days-1)
+    
+    # Daily call counts for trends
+    daily_calls = []
+    for i in range(days):
+        date = start_date + timedelta(days=i)
+        call_count = Call.objects.filter(start_time__date=date).count()
+        daily_calls.append({
+            'date': date.strftime('%Y-%m-%d'),
+            'date_formatted': date.strftime('%b %d'),
+            'count': call_count
+        })
+    
+    # Average response times by day (using call duration as proxy)
+    daily_response_times = []
+    for i in range(days):
+        date = start_date + timedelta(days=i)
+        avg_duration = Call.objects.filter(
+            start_time__date=date,
+            duration__isnull=False
+        ).aggregate(avg_duration=Avg('duration'))
+        
+        # Convert duration to minutes
+        avg_minutes = 0
+        if avg_duration['avg_duration']:
+            avg_minutes = avg_duration['avg_duration'].total_seconds() / 60
+        
+        daily_response_times.append({
+            'date': date.strftime('%Y-%m-%d'),
+            'date_formatted': date.strftime('%b %d'),
+            'avg_duration_minutes': round(avg_minutes, 1)
+        })
+    
+    # Hourly distribution for current day
+    hourly_calls = []
+    today = datetime.now().date()
+    for hour in range(24):
+        call_count = Call.objects.filter(
+            start_time__date=today,
+            start_time__hour=hour
+        ).count()
+        hourly_calls.append({
+            'hour': hour,
+            'hour_formatted': f"{hour:02d}:00",
+            'count': call_count
+        })
+    
+    # Risk level trends over time
+    risk_trends = []
+    for i in range(days):
+        date = start_date + timedelta(days=i)
+        risk_counts = Memory.objects.filter(
+            call__start_time__date=date
+        ).values('risk_level').annotate(count=Count('risk_level'))
+        
+        risk_data = {
+            'date': date.strftime('%Y-%m-%d'),
+            'date_formatted': date.strftime('%b %d'),
+            'low': 0,
+            'moderate': 0,
+            'high': 0,
+            'critical': 0
+        }
+        
+        for item in risk_counts:
+            if item['risk_level'] in risk_data:
+                risk_data[item['risk_level']] = item['count']
+        
+        risk_trends.append(risk_data)
+    
+    return JsonResponse({
+        'daily_calls': daily_calls,
+        'daily_response_times': daily_response_times,
+        'hourly_calls': hourly_calls,
+        'risk_trends': risk_trends,
+        'date_range': {
+            'start': start_date.strftime('%Y-%m-%d'),
+            'end': end_date.strftime('%Y-%m-%d'),
+            'days': days
+        }
+    })
+
 def test_view(request):
     """Test view"""
     return render(request, 'test.html')

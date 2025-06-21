@@ -79,8 +79,21 @@ class Command(BaseCommand):
         self.stdout.write(f'Creating {num_calls} sample calls...')
         
         for i in range(num_calls):
-            # Create call
-            start_time = datetime.now() - timedelta(days=random.randint(0, 30))
+            # Create call - spread across the last 7 days with more calls on recent days
+            days_back = random.choices(
+                range(7),  # 0-6 days back
+                weights=[5, 4, 3, 2, 2, 1, 1],  # More weight on recent days
+                k=1
+            )[0]
+            
+            # Random hour and minute for realistic spread
+            base_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            start_time = base_date - timedelta(days=days_back)
+            start_time = start_time.replace(
+                hour=random.randint(6, 23),  # Calls between 6 AM and 11 PM
+                minute=random.randint(0, 59)
+            )
+            
             duration = timedelta(minutes=random.randint(5, 60))
             
             call = Call.objects.create(

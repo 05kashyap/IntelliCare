@@ -55,6 +55,7 @@
         .risk-moderate { background-color: #f39c12; }
         .risk-high { background-color: #e67e22; }
         .risk-critical { background-color: #e74c3c; }
+        .risk-unknown { background-color: #95a5a6; }
         .calls-table {
             background: white;
             border-radius: 8px;
@@ -122,9 +123,15 @@
         // Load dashboard data
         async function loadDashboard() {
             try {
+                console.log('Loading dashboard data...');
+                
                 // Load statistics
                 const statsResponse = await fetch('/api/dashboard/stats/');
+                if (!statsResponse.ok) {
+                    throw new Error(`Stats API error: ${statsResponse.status}`);
+                }
                 const stats = await statsResponse.json();
+                console.log('Stats loaded:', stats);
                 
                 document.getElementById('stats-grid').innerHTML = `
                     <div class="stat-card">
@@ -146,30 +153,73 @@
                 `;
 
                 // Load recent calls
-                const callsResponse = await fetch('/api/calls/?limit=10');
+                const callsResponse = await fetch('/api/dashboard/calls/?limit=10');
+                if (!callsResponse.ok) {
+                    throw new Error(`Calls API error: ${callsResponse.status}`);
+                }
                 const callsData = await callsResponse.json();
+                console.log('Calls loaded:', callsData);
                 
-                const callsHtml = callsData.results.map(call => {
-                    const riskLevel = call.latest_risk_level;
-                    const riskClass = riskLevel ? `risk-${riskLevel.level}` : '';
-                    const riskDisplay = riskLevel ? riskLevel.display : 'Unknown';
-                    
-                    return `
-                        <div class="table-row">
-                            <div>${call.phone_number}</div>
-                            <div>${new Date(call.start_time).toLocaleString()}</div>
-                            <div><span class="risk-indicator ${riskClass}">${riskDisplay}</span></div>
-                            <div>${call.status}</div>
-                            <div>${call.call_duration_formatted || 'N/A'}</div>
+                const calls = callsData.results || callsData;
+                if (!calls || calls.length === 0) {
+                    document.getElementById('calls-list').innerHTML = `
+                        <div style="padding: 20px; text-align: center; color: #7f8c8d;">
+                            No calls found
                         </div>
                     `;
+                    return;
+                }
+                
+                const callsHtml = calls.map(call => {
+                    try {
+                        const riskLevel = call.latest_risk_level;
+                        const riskClass = riskLevel ? `risk-${riskLevel.level}` : 'risk-unknown';
+                        const riskDisplay = riskLevel ? riskLevel.display : 'Unknown';
+                        
+                        const startTime = call.start_time ? new Date(call.start_time).toLocaleString() : 'Unknown';
+                        const phoneNumber = call.phone_number || 'Unknown';
+                        const status = call.status || 'Unknown';
+                        const duration = call.call_duration_formatted || 'N/A';
+                        
+                        return `
+                            <div class="table-row">
+                                <div>${phoneNumber}</div>
+                                <div>${startTime}</div>
+                                <div><span class="risk-indicator ${riskClass}">${riskDisplay}</span></div>
+                                <div>${status}</div>
+                                <div>${duration}</div>
+                            </div>
+                        `;
+                    } catch (e) {
+                        console.error('Error rendering call:', call, e);
+                        return `
+                            <div class="table-row">
+                                <div>Error loading call</div>
+                                <div>-</div>
+                                <div>-</div>
+                                <div>-</div>
+                                <div>-</div>
+                            </div>
+                        `;
+                    }
                 }).join('');
                 
                 document.getElementById('calls-list').innerHTML = callsHtml;
+                console.log('Dashboard loaded successfully');
                 
             } catch (error) {
                 console.error('Error loading dashboard:', error);
-                document.getElementById('stats-grid').innerHTML = '<p>Error loading dashboard data</p>';
+                document.getElementById('stats-grid').innerHTML = `
+                    <div class="stat-card">
+                        <div class="stat-number">Error</div>
+                        <div class="stat-label">Failed to load data: ${error.message}</div>
+                    </div>
+                `;
+                document.getElementById('calls-list').innerHTML = `
+                    <div style="padding: 20px; text-align: center; color: #e74c3c;">
+                        Error loading calls: ${error.message}
+                    </div>
+                `;
             }
         }
 

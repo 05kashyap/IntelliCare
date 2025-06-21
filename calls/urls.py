@@ -9,14 +9,22 @@ router.register(r'memories', views.MemoryViewSet)
 router.register(r'notes', views.CallNoteViewSet)
 router.register(r'emergency-contacts', views.EmergencyContactViewSet)
 
+# Dashboard router (no authentication required)
+dashboard_router = DefaultRouter()
+dashboard_router.register(r'calls', views.DashboardCallViewSet)
+dashboard_router.register(r'memories', views.DashboardMemoryViewSet)
+
 urlpatterns = [
     # Dashboard
     path('', views.dashboard_view, name='dashboard'),
+    path('test/', views.test_view, name='test'),
+    path('debug/', views.debug_view, name='debug'),
     
-    # API endpoints
+    # API endpoints (authenticated)
     path('api/', include(router.urls)),
     
-    # Dashboard stats
+    # Dashboard API endpoints (public)
+    path('api/dashboard/', include(dashboard_router.urls)),
     path('api/dashboard/stats/', views.dashboard_stats, name='dashboard_stats'),
     
     # Twilio webhooks

@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hotline Dashboard - Debug</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .loading { color: #666; }
+        .error { color: #e74c3c; }
+        .success { color: #27ae60; }
+    </style>
+</head>
+<body>
+    <h1>Hotline Dashboard</h1>
+    
+    <div id="status" class="loading">Loading...</div>
+    
+    <h2>Stats</h2>
+    <div id="stats"></div>
+    
+    <h2>Recent Calls</h2>
+    <div id="calls"></div>
+
+    <script>
+        async function loadDashboard() {
+            const statusDiv = document.getElementById('status');
+            const statsDiv = document.getElementById('stats');
+            const callsDiv = document.getElementById('calls');
+            
+            try {
+                statusDiv.innerHTML = 'Loading stats...';
+                statusDiv.className = 'loading';
+                
+                // Load statistics
+                const statsResponse = await fetch('/api/dashboard/stats/');
+                if (!statsResponse.ok) {
+                    throw new Error(`Stats API error: ${statsResponse.status} ${statsResponse.statusText}`);
+                }
+                const stats = await statsResponse.json();
+                
+                statsDiv.innerHTML = `
+                    <p>Total Calls: ${stats.total_calls}</p>
+                    <p>Calls Today: ${stats.calls_today}</p>
+                    <p>High Risk: ${stats.high_risk_calls}</p>
+                `;
+                
+                statusDiv.innerHTML = 'Loading calls...';
+                
+                // Load recent calls
+                const callsResponse = await fetch('/api/dashboard/calls/?limit=5');
+                if (!callsResponse.ok) {
+                    throw new Error(`Calls API error: ${callsResponse.status} ${callsResponse.statusText}`);
+                }
+                const callsData = await callsResponse.json();
+                
+                const calls = callsData.results || callsData;
+                let callsHtml = '<ul>';
+                calls.forEach(call => {
+                    const risk = call.latest_risk_level ? call.latest_risk_level.display : 'Unknown';
+                    callsHtml += `<li>${call.phone_number} - ${risk} - ${call.status}</li>`;
+                });
+                callsHtml += '</ul>';
+                
+                callsDiv.innerHTML = callsHtml;
+                
+                statusDiv.innerHTML = 'Dashboard loaded successfully!';
+                statusDiv.className = 'success';
+                
+            } catch (error) {
+                console.error('Dashboard error:', error);
+                statusDiv.innerHTML = `Error: ${error.message}`;
+                statusDiv.className = 'error';
+                
+                statsDiv.innerHTML = 'Failed to load stats';
+                callsDiv.innerHTML = 'Failed to load calls';
+            }
+        }
+
+        // Load dashboard
+        loadDashboard();
+    </script>
+</body>
+</html>

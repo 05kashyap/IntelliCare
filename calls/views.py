@@ -1,7 +1,7 @@
 from rest_framework import viewsets, status
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.shortcuts import get_object_or_404, render
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
@@ -102,6 +102,38 @@ class EmergencyContactViewSet(viewsets.ModelViewSet):
     queryset = EmergencyContact.objects.all()
     serializer_class = EmergencyContactSerializer
     permission_classes = [IsAuthenticated]
+
+
+# Dashboard viewsets (no authentication required)
+class DashboardCallViewSet(viewsets.ReadOnlyModelViewSet):
+    """Read-only ViewSet for Call model for dashboard"""
+    queryset = Call.objects.all()
+    serializer_class = CallSerializer
+    permission_classes = [AllowAny]
+    
+    def list(self, request, *args, **kwargs):
+        """Override list to handle limit parameter properly"""
+        queryset = self.get_queryset()
+        limit = request.query_params.get('limit', None)
+        
+        if limit:
+            try:
+                limit = int(limit)
+                queryset = queryset[:limit]
+            except ValueError:
+                pass
+        
+        serializer = self.get_serializer(queryset, many=True)
+        return Response({
+            'results': serializer.data,
+            'count': len(serializer.data)
+        })
+
+class DashboardMemoryViewSet(viewsets.ReadOnlyModelViewSet):
+    """Read-only ViewSet for Memory model for dashboard"""
+    queryset = Memory.objects.all()
+    serializer_class = MemorySerializer
+    permission_classes = [AllowAny]
 
 
 # Twilio webhook views
@@ -227,11 +259,15 @@ def twilio_status_webhook(request):
     return JsonResponse({'error': 'Method not allowed'}, status=405)
 
 
+@api_view(['GET'])
+@permission_classes([AllowAny])
 def dashboard_view(request):
     """Dashboard view"""
     return render(request, 'dashboard.html')
 
 
+@api_view(['GET'])
+@permission_classes([AllowAny])
 def dashboard_stats(request):
     """Get dashboard statistics"""
     from django.db.models import Count, Avg
@@ -281,3 +317,11 @@ def dashboard_stats(request):
     }
     
     return JsonResponse(stats)
+
+def test_view(request):
+    """Test view"""
+    return render(request, 'test.html')
+
+def debug_view(request):
+    """Debug view"""
+    return render(request, 'debug.html')

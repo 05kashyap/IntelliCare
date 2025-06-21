@@ -5,8 +5,6 @@ This file shows how you would integrate your AI agent with the Django backend
 import os
 import requests
 import json
-import asyncio
-import threading
 import shutil
 import hashlib
 import time
@@ -15,13 +13,11 @@ from django.conf import settings
 from django.http import JsonResponse, HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
-from twilio.twiml.voice_response import VoiceResponse, Gather, Say, Play, Record
+from twilio.twiml.voice_response import VoiceResponse
 from twilio.rest import Client
-from .models import Call, Memory, RecordingChunk
-from .sarv import transcribe_input, query_llm, convert_to_audio_and_save, system_prompt
-import os
+from .models import Call
+from .sarv import system_prompt
 from datetime import datetime, timedelta
-import uuid
 
 class LocalRecordingStorage:
     """Handle local storage of call recordings"""
@@ -43,13 +39,10 @@ class LocalRecordingStorage:
         Returns local file path and URL
         """
         try:
-            # Download audio from Twilio
-            audio_response = requests.get(recording_url, auth=(
-                settings.TWILIO_ACCOUNT_SID,
-                settings.TWILIO_AUTH_TOKEN
-            ))
+            # Use centralized download logic
+            audio_response = self._download_from_twilio(recording_url)
             
-            if audio_response.status_code == 200:
+            if audio_response and audio_response.status_code == 200:
                 # Generate filename with timestamp and call info
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
                 file_extension = self._get_file_extension(audio_response.headers.get('content-type', 'audio/wav'))
@@ -97,12 +90,45 @@ class LocalRecordingStorage:
                 return metadata
                 
             else:
-                print(f"Failed to download recording: HTTP {audio_response.status_code}")
+                print(f"Failed to download recording: HTTP {audio_response.status_code if audio_response else 'No response'}")
                 return None
                 
         except Exception as e:
             print(f"Error storing recording locally: {e}")
             return None
+    
+    def _download_from_twilio(self, recording_url, max_retries=3, retry_delay=1):
+        """Centralized method to download audio from Twilio with retry logic"""
+        for attempt in range(max_retries):
+            try:
+                print(f"Download attempt {attempt + 1}/{max_retries}")
+                
+                audio_response = requests.get(recording_url, auth=(
+                    settings.TWILIO_ACCOUNT_SID,
+                    settings.TWILIO_AUTH_TOKEN
+                ))
+                
+                print(f"Twilio response status: {audio_response.status_code}")
+                
+                if audio_response.status_code == 200:
+                    return audio_response
+                elif audio_response.status_code == 404 and attempt < max_retries - 1:
+                    print(f"Recording not yet available (404), waiting {retry_delay}s before retry...")
+                    time.sleep(retry_delay)
+                    continue
+                else:
+                    print(f"Failed to download audio: HTTP {audio_response.status_code}")
+                    if attempt < max_retries - 1:
+                        print(f"Retrying in {retry_delay}s...")
+                        time.sleep(retry_delay)
+                    
+            except Exception as e:
+                print(f"Error downloading audio (attempt {attempt + 1}): {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+        
+        print(f"Failed to download audio after {max_retries} attempts")
+        return None
     
     def _get_file_extension(self, content_type):
         """Get appropriate file extension based on content type"""
@@ -227,76 +253,6 @@ class LocalRecordingStorage:
 local_storage = LocalRecordingStorage()
 
 
-class AIAgentService:
-    """Service for interacting with AI agent"""
-    
-    def __init__(self):
-        self.agent_api_url = getattr(settings, 'AI_AGENT_API_URL', 'http://localhost:5000')
-    
-    def process_call_audio(self, call_id):
-        """
-        Process audio from a call and create memory record
-        This would be called after a recording is completed
-        """
-        try:
-            call = Call.objects.get(id=call_id)
-            
-            # Step 1: Send audio to AI agent for processing
-            agent_response = self._send_audio_to_agent(call.audio_file_url)
-            
-            # Step 2: Create memory record from agent response
-            memory = self._create_memory_from_response(call, agent_response)
-            
-            # Step 3: Update call with transcription if provided
-            if agent_response.get('transcription'):
-                call.transcription = agent_response['transcription']
-                call.save()
-            
-            return memory
-            
-        except Call.DoesNotExist:
-            raise ValueError(f"Call {call_id} not found")
-        except Exception as e:
-            print(f"Error processing call audio: {e}")
-            raise
-    
-    def _send_audio_to_agent(self, audio_url):
-        """
-        Send audio URL to AI agent for processing
-        Replace this with your actual AI agent API call
-        """
-        payload = {
-            'audio_url': audio_url,
-            'task': 'crisis_intervention_analysis'
-        }
-        
-        # This is a mock response - replace with actual API call
-        # response = requests.post(f"{self.agent_api_url}/process_audio", json=payload)
-        # return response.json()
-        
-        # Mock response for demonstration
-        return {
-        }
-
-# Example usage in your Django views or Celery tasks
-def process_call_audio_task(call_id):
-    """
-    This could be a Celery task that processes audio after recording completion
-    """
-    agent_service = AIAgentService()
-    try:
-        memory = agent_service.process_call_audio(call_id)
-        print(f"Created memory {memory.id} for call {call_id}")
-        
-        # If high risk, trigger additional actions
-        if memory.risk_level in ['high', 'critical']:
-            # Send alerts, create emergency contacts, etc.
-            handle_high_risk_case(memory)
-            
-    except Exception as e:
-        print(f"Error processing call {call_id}: {e}")
-
-
 def handle_high_risk_case(memory):
     """Handle high-risk cases with additional actions"""
     from .models import EmergencyContact
@@ -348,63 +304,6 @@ def webhook_ai_agent_update(request):
             return JsonResponse({'error': 'Call not found'}, status=404)
     
     return JsonResponse({'error': 'Method not allowed'}, status=405)
-
-
-@csrf_exempt
-@require_http_methods(["POST"])
-def handle_twilio_voice_request(request):
-    """
-    Handle incoming voice calls from Twilio
-    This will initiate the call processing workflow
-    """
-    try:
-        # Extract Twilio parameters
-        from_number = request.POST.get('From')
-        to_number = request.POST.get('To')
-        call_sid = request.POST.get('CallSid')
-        recording_url = request.POST.get('RecordingUrl')
-        transcription_text = request.POST.get('TranscriptionText', '')
-        
-        # Log the incoming call
-        print(f"Incoming call from {from_number} to {to_number}, SID: {call_sid}")
-        
-        # Create or update the Call record in the database
-        call, created = Call.objects.get_or_create(
-            call_sid=call_sid,
-            defaults={
-                'from_number': from_number,
-                'to_number': to_number,
-                'status': 'completed' if recording_url else 'in_progress',
-                'recording_url': recording_url,
-                'transcription': transcription_text,
-                'start_time': datetime.utcnow(),
-                'end_time': datetime.utcnow() + timedelta(seconds=30),  # Estimate end time
-                'duration': 30,  # Placeholder duration
-            }
-        )
-        
-        if not created:
-            # Update existing call record with new information
-            call.recording_url = recording_url
-            call.transcription = transcription_text
-            call.status = 'completed' if recording_url else 'in_progress'
-            call.end_time = datetime.utcnow()
-            call.duration = (call.end_time - call.start_time).seconds
-            call.save()
-        
-        # If recording is available, process the audio
-        if recording_url:
-            # Start the audio processing in a separate thread
-            threading.Thread(target=process_call_audio_task, args=(call.id,)).start()
-        
-        # Respond to Twilio with a simple message
-        response = VoiceResponse()
-        response.say("Thank you for your call. We are processing your information.", voice="alice")
-        return HttpResponse(str(response), content_type='text/xml')
-    
-    except Exception as e:
-        print(f"Error handling Twilio request: {e}")
-        return HttpResponse(status=500)
 
 
 class TwilioVoiceService:
@@ -641,63 +540,42 @@ class TwilioVoiceService:
             print(f"Downloading audio from Twilio for call {call_id}")
             print(f"Recording URL: {recording_url}")
             
-            # Wait a moment for Twilio to make the recording available
-            max_retries = 3
-            retry_delay = 1  # seconds
+            # Use centralized download logic
+            audio_response = local_storage._download_from_twilio(recording_url)
             
-            for attempt in range(max_retries):
-                print(f"Download attempt {attempt + 1}/{max_retries}")
+            if audio_response and audio_response.status_code == 200:
+                # Create temporary file for processing
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                filename = f"input_{timestamp}_{str(call_id)[:8]}.wav"
                 
-                # Download audio from Twilio
-                audio_response = requests.get(recording_url, auth=(
-                    settings.TWILIO_ACCOUNT_SID,
-                    settings.TWILIO_AUTH_TOKEN
-                ))
+                # Save to a processing directory
+                processing_dir = os.path.join(settings.MEDIA_ROOT, 'processing')
+                os.makedirs(processing_dir, exist_ok=True)
                 
-                print(f"Twilio response status: {audio_response.status_code}")
+                input_file_path = os.path.join(processing_dir, filename)
                 
-                if audio_response.status_code == 200:
-                    # Create temporary file for processing
-                    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                    filename = f"input_{timestamp}_{str(call_id)[:8]}.wav"
-                    
-                    # Save to a processing directory
-                    processing_dir = os.path.join(settings.MEDIA_ROOT, 'processing')
-                    os.makedirs(processing_dir, exist_ok=True)
-                    
-                    input_file_path = os.path.join(processing_dir, filename)
-                    
-                    with open(input_file_path, 'wb') as f:
-                        f.write(audio_response.content)
-                    
-                    file_size = len(audio_response.content)
-                    print(f"Downloaded audio for processing: {input_file_path} (size: {file_size} bytes)")
-                    
-                    # Verify file was created and has content
-                    if os.path.exists(input_file_path) and os.path.getsize(input_file_path) > 0:
-                        actual_size = os.path.getsize(input_file_path)
-                        print(f"File verification: {input_file_path} exists (size: {actual_size} bytes)")
-                        return input_file_path
-                    else:
-                        print(f"ERROR: Downloaded file not found or empty: {input_file_path}")
-                        if os.path.exists(input_file_path):
-                            os.remove(input_file_path)  # Clean up empty file
-                elif audio_response.status_code == 404 and attempt < max_retries - 1:
-                    print(f"Recording not yet available (404), waiting {retry_delay}s before retry...")
-                    time.sleep(retry_delay)
-                    continue
+                with open(input_file_path, 'wb') as f:
+                    f.write(audio_response.content)
+                
+                file_size = len(audio_response.content)
+                print(f"Downloaded audio for processing: {input_file_path} (size: {file_size} bytes)")
+                
+                # Verify file was created and has content
+                if os.path.exists(input_file_path) and os.path.getsize(input_file_path) > 0:
+                    actual_size = os.path.getsize(input_file_path)
+                    print(f"File verification: {input_file_path} exists (size: {actual_size} bytes)")
+                    return input_file_path
                 else:
-                    print(f"Failed to download audio: HTTP {audio_response.status_code}")
-                    if attempt < max_retries - 1:
-                        print(f"Retrying in {retry_delay}s...")
-                        time.sleep(retry_delay)
-                    
-            print(f"Failed to download audio after {max_retries} attempts")
+                    print(f"ERROR: Downloaded file not found or empty: {input_file_path}")
+                    if os.path.exists(input_file_path):
+                        os.remove(input_file_path)  # Clean up empty file
+            else:
+                print(f"Failed to download audio for processing")
+                
             return None
                 
         except Exception as e:
             print(f"Error downloading audio for processing: {e}")
-            import traceback
             traceback.print_exc()
             return None
     
@@ -956,13 +834,10 @@ class TwilioVoiceService:
         Returns audio data that can be sent to AI processing
         """
         try:
-            # Download the audio file
-            audio_response = requests.get(recording_url, auth=(
-                settings.TWILIO_ACCOUNT_SID, 
-                settings.TWILIO_AUTH_TOKEN
-            ))
+            # Use centralized download logic
+            audio_response = local_storage._download_from_twilio(recording_url)
             
-            if audio_response.status_code == 200:
+            if audio_response and audio_response.status_code == 200:
                 # Return audio data for processing
                 return {
                     'audio_data': audio_response.content,
@@ -971,7 +846,7 @@ class TwilioVoiceService:
                     'size': len(audio_response.content)
                 }
             else:
-                print(f"Failed to download audio: {audio_response.status_code}")
+                print(f"Failed to download audio")
                 return None
                 
         except Exception as e:
@@ -1092,43 +967,6 @@ def twilio_status_webhook(request):
     
     return HttpResponse('OK')
 
-
-# Utility functions for audio processing
-async def process_audio_async(audio_data, call_id):
-    """
-    Asynchronously process audio data
-    This function can be called to process audio without blocking the call
-    """
-    def process_in_thread():
-        try:
-            # Your AI processing logic here
-            # This could call your AI service to analyze the audio
-            agent_service = AIAgentService()
-            
-            # Simulate processing time
-            import time
-            time.sleep(2)  # Remove this in production
-            
-            # Process the audio (implement your actual AI logic here)
-            result = {
-                'call_id': call_id,
-                'processed': True,
-                'response_audio_url': None,  # URL to generated response audio
-                'analysis': 'Audio processed successfully'
-            }
-            
-            return result
-            
-        except Exception as e:
-            print(f"Error in async processing: {e}")
-            return None
-    
-    # Run in thread to avoid blocking
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    
-    result = await loop.run_in_executor(None, process_in_thread)
-    return result
 
 # API endpoint for manual audio processing (useful for testing)
 @csrf_exempt
@@ -1449,61 +1287,4 @@ def get_recording_for_processing(recording_url_or_call_id, prefer_local=True):
     except Exception as e:
         print(f"Error getting recording for processing: {e}")
         return None
-
-
-# Function to extract user voice from call (as requested)
-def extract_user_voice_from_call(call_id_or_recording_url, prefer_local=True):
-    """
-    Function to extract voice/audio from call recording
-    This is the main function that gives you the user's voice as output
-    
-    Args:
-        call_id_or_recording_url: Either a call ID or Twilio recording URL
-        prefer_local: Whether to prefer local storage over Twilio
-        
-    Returns:
-        dict: Audio data including file path, content, and metadata
-    """
-    return get_recording_for_processing(call_id_or_recording_url, prefer_local)
-
-
-# Function to play audio file to caller (as requested)
-def play_audio_file_to_caller(call_sid, audio_file_path_or_url):
-    """
-    Function to play an audio file to the user during an active call
-    Supports both local file paths and URLs
-    
-    Args:
-        call_sid (str): Twilio call SID
-        audio_file_path_or_url (str): Path to local audio file or URL
-        
-    Returns:
-        bool: True if successful, False otherwise
-    """
-    try:
-        service = TwilioVoiceService()
-        
-        # If it's a local file path, we need to convert it to a publicly accessible URL
-        if not audio_file_path_or_url.startswith('http'):
-            # For local files, you'd need to serve them through Django's media handling
-            # or upload to a CDN/cloud storage for Twilio to access
-            
-            # Convert local path to media URL if it's in the media directory
-            if audio_file_path_or_url.startswith(settings.MEDIA_ROOT):
-                relative_path = os.path.relpath(audio_file_path_or_url, settings.MEDIA_ROOT)
-                audio_url = f"{settings.MEDIA_URL}{relative_path.replace(os.sep, '/')}"
-                
-                # You'd need to ensure your server can serve this URL publicly
-                # For production, consider uploading to S3 or similar
-                return service.play_audio_to_caller(call_sid, audio_url)
-            else:
-                print("Error: Local file path must be in media directory for serving")
-                return False
-        else:
-            # It's already a URL
-            return service.play_audio_to_caller(call_sid, audio_file_path_or_url)
-            
-    except Exception as e:
-        print(f"Error playing audio to caller: {e}")
-        return False
 

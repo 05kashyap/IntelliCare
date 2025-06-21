@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hotline Dashboard</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .header {
+            background-color: #2c3e50;
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .stat-number {
+            font-size: 2em;
+            font-weight: bold;
+            color: #3498db;
+        }
+        .stat-label {
+            color: #7f8c8d;
+            margin-top: 5px;
+        }
+        .risk-indicator {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 12px;
+            color: white;
+            font-size: 0.8em;
+            font-weight: bold;
+        }
+        .risk-low { background-color: #27ae60; }
+        .risk-moderate { background-color: #f39c12; }
+        .risk-high { background-color: #e67e22; }
+        .risk-critical { background-color: #e74c3c; }
+        .calls-table {
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .table-header {
+            background-color: #34495e;
+            color: white;
+            padding: 15px 20px;
+            font-weight: bold;
+        }
+        .table-row {
+            padding: 15px 20px;
+            border-bottom: 1px solid #ecf0f1;
+            display: grid;
+            grid-template-columns: 1fr 1fr 120px 100px 80px;
+            align-items: center;
+        }
+        .table-row:hover {
+            background-color: #f8f9fa;
+        }
+        .btn {
+            background-color: #3498db;
+            color: white;
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+        }
+        .btn:hover {
+            background-color: #2980b9;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔔 Suicide Prevention Hotline Dashboard</h1>
+            <p>Real-time monitoring and management system</p>
+        </div>
+
+        <div class="stats-grid" id="stats-grid">
+            <!-- Stats will be loaded here -->
+        </div>
+
+        <div class="calls-table">
+            <div class="table-header">
+                Recent Calls
+            </div>
+            <div id="calls-list">
+                <!-- Calls will be loaded here -->
+            </div>
+        </div>
+
+        <div style="margin-top: 20px; text-align: center;">
+            <a href="/admin/" class="btn">Admin Dashboard</a>
+            <a href="/api/calls/" class="btn">API Documentation</a>
+        </div>
+    </div>
+
+    <script>
+        // Load dashboard data
+        async function loadDashboard() {
+            try {
+                // Load statistics
+                const statsResponse = await fetch('/api/dashboard/stats/');
+                const stats = await statsResponse.json();
+                
+                document.getElementById('stats-grid').innerHTML = `
+                    <div class="stat-card">
+                        <div class="stat-number">${stats.total_calls}</div>
+                        <div class="stat-label">Total Calls</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-number">${stats.calls_today}</div>
+                        <div class="stat-label">Calls Today</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-number">${stats.calls_this_week}</div>
+                        <div class="stat-label">Calls This Week</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-number">${stats.high_risk_calls}</div>
+                        <div class="stat-label">High Risk Cases</div>
+                    </div>
+                `;
+
+                // Load recent calls
+                const callsResponse = await fetch('/api/calls/?limit=10');
+                const callsData = await callsResponse.json();
+                
+                const callsHtml = callsData.results.map(call => {
+                    const riskLevel = call.latest_risk_level;
+                    const riskClass = riskLevel ? `risk-${riskLevel.level}` : '';
+                    const riskDisplay = riskLevel ? riskLevel.display : 'Unknown';
+                    
+                    return `
+                        <div class="table-row">
+                            <div>${call.phone_number}</div>
+                            <div>${new Date(call.start_time).toLocaleString()}</div>
+                            <div><span class="risk-indicator ${riskClass}">${riskDisplay}</span></div>
+                            <div>${call.status}</div>
+                            <div>${call.call_duration_formatted || 'N/A'}</div>
+                        </div>
+                    `;
+                }).join('');
+                
+                document.getElementById('calls-list').innerHTML = callsHtml;
+                
+            } catch (error) {
+                console.error('Error loading dashboard:', error);
+                document.getElementById('stats-grid').innerHTML = '<p>Error loading dashboard data</p>';
+            }
+        }
+
+        // Load dashboard on page load
+        loadDashboard();
+        
+        // Refresh every 30 seconds
+        setInterval(loadDashboard, 30000);
+    </script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Start Django Server",
+			"type": "shell",
+			"command": "/home/kashyap/Documents/Projects/suicide_hotline/venv/bin/python",
+			"args": [
+				"manage.py",
+				"runserver"
+			],
+			"group": "build",
+			"isBackground": true,
+			"problemMatcher": []
+		}
+	]
+}

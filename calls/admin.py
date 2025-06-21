@@ -2,7 +2,7 @@ from django.contrib import admin
 from django.utils.html import format_html
 from django.urls import reverse
 from django.utils.safestring import mark_safe
-from .models import Call, Memory, CallNote, EmergencyContact
+from .models import Call, Memory, CallNote, EmergencyContact, RecordingChunk
 
 
 class MemoryInline(admin.StackedInline):
@@ -38,6 +38,15 @@ class EmergencyContactInline(admin.TabularInline):
     model = EmergencyContact
     extra = 0
     fields = ('contact_type', 'contact_info', 'contacted', 'contact_time', 'notes')
+
+
+class RecordingChunkInline(admin.TabularInline):
+    """Inline admin for recording chunks"""
+    model = RecordingChunk
+    extra = 0
+    fields = ('chunk_number', 'recording_url', 'processed', 'response_played', 'recorded_at')
+    readonly_fields = ('recorded_at', 'processed_at')
+    ordering = ['chunk_number']
 
 
 @admin.register(Call)
@@ -98,7 +107,7 @@ class CallAdmin(admin.ModelAdmin):
             'classes': ('collapse',)
         })
     )
-    inlines = [MemoryInline, CallNoteInline, EmergencyContactInline]
+    inlines = [MemoryInline, CallNoteInline, EmergencyContactInline, RecordingChunkInline]
     date_hierarchy = 'start_time'
     actions = ['mark_as_completed', 'export_to_csv']
     
@@ -308,6 +317,62 @@ class EmergencyContactAdmin(admin.ModelAdmin):
         ('contacted', 'contact_time'),
         'notes',
         'created_at'
+    )
+    
+    def call_phone_number(self, obj):
+        """Display the phone number from related call"""
+        return obj.call.phone_number
+    call_phone_number.short_description = 'Phone Number'
+
+
+@admin.register(RecordingChunk)
+class RecordingChunkAdmin(admin.ModelAdmin):
+    """Admin interface for RecordingChunk model"""
+    list_display = (
+        'call_phone_number',
+        'chunk_number',
+        'processed',
+        'response_played',
+        'duration_seconds',
+        'recorded_at'
+    )
+    list_filter = (
+        'processed',
+        'response_played',
+        'recorded_at'
+    )
+    search_fields = (
+        'call__phone_number',
+        'call__twilio_call_sid'
+    )
+    readonly_fields = (
+        'id',
+        'recorded_at',
+        'processed_at'
+    )
+    fieldsets = (
+        ('Recording Information', {
+            'fields': (
+                'id',
+                'call',
+                ('chunk_number', 'duration_seconds'),
+                'recording_url',
+                ('local_recording_path', 'local_recording_url')
+            )
+        }),
+        ('AI Processing', {
+            'fields': (
+                ('processed', 'processed_at'),
+                'response_audio_url',
+                'response_played'
+            )
+        }),
+        ('Timestamps', {
+            'fields': (
+                'recorded_at',
+            ),
+            'classes': ('collapse',)
+        })
     )
     
     def call_phone_number(self, obj):

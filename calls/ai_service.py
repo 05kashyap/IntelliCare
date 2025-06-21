@@ -14,7 +14,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from twilio.twiml.voice_response import VoiceResponse, Gather, Say, Play, Record
 from twilio.rest import Client
-from .models import Call, Memory
+from .models import Call, Memory, RecordingChunk
 import os
 from datetime import datetime, timedelta
 import uuid
@@ -535,18 +535,11 @@ class TwilioVoiceService:
         self.active_calls[call_sid] = {
             'call_id': str(call.id),
             'status': 'listening',
-            'audio_chunks': []
+            'audio_chunks': [],
+            'recording_count': 0
         }
         
-        # Welcome message and start recording
-        response.say(
-            "Hello, you've reached the crisis support hotline. "
-            "Please speak clearly and we'll listen to help you. "
-            "You can talk for up to 30 seconds at a time.",
-            voice='Polly.Joanna'
-        )
-        
-        # Start recording with callback
+        # Start recording immediately without any welcome message
         response.record(
             action=f'/twilio/recording/{call.id}/',
             method='POST',
@@ -570,106 +563,89 @@ class TwilioVoiceService:
         try:
             call = Call.objects.get(id=call_id)
             
-            # Store recording URL
+            # Get current chunk number
+            chunk_number = call.recording_chunks.count() + 1
+            
+            # Store recording information
+            recording_chunk = None
             if recording_url:
-                call.audio_file_url = recording_url
-                
                 # Store recording locally
                 local_metadata = local_storage.store_recording_locally(
                     recording_url, call_id, call_sid
                 )
                 
+                # Create recording chunk record
+                recording_chunk = call.recording_chunks.create(
+                    recording_url=recording_url,
+                    chunk_number=chunk_number,
+                    local_recording_path=local_metadata['local_path'] if local_metadata else None,
+                    local_recording_url=local_metadata['local_url'] if local_metadata else None
+                )
+                
+                # Update main call record with latest recording URL (for backward compatibility)
+                call.audio_file_url = recording_url
                 if local_metadata:
                     call.local_recording_path = local_metadata['local_path']
                     call.local_recording_url = local_metadata['local_url']
-                    print(f"Recording stored both remotely and locally for call {call_id}")
-                else:
-                    print(f"Failed to store recording locally for call {call_id}")
-                
+                    
                 call.save()
+                print(f"Recording chunk {chunk_number} stored for call {call_id}")
             
-            # Add to active call chunks
+            # Update active call tracking
             if call_sid in self.active_calls:
+                self.active_calls[call_sid]['recording_count'] = chunk_number
                 self.active_calls[call_sid]['audio_chunks'].append({
                     'recording_url': recording_url,
-                    'local_path': call.local_recording_path if hasattr(call, 'local_recording_path') else None,
+                    'chunk_id': str(recording_chunk.id) if recording_chunk else None,
+                    'chunk_number': chunk_number,
+                    'local_path': recording_chunk.local_recording_path if recording_chunk else None,
                     'timestamp': datetime.now().isoformat()
                 })
             
-            # Process audio asynchronously and get response
-            audio_data = self.get_audio_for_processing(recording_url)
+            # Wait for Sarvam AI response (simulated by checking outputs folder)
+            # In real implementation, this would trigger Sarvam AI API call
+            response_audio_url = self.wait_for_ai_response(call_id)
             
-            # Say processing message
-            response.say(
-                "Thank you for sharing. I'm processing what you've said. "
-                "Please wait a moment.",
-                voice='Polly.Joanna'
-            )
-            
-            # Redirect to continue conversation
-            response.redirect(f'/twilio/continue/{call_id}/')
-            
+            if response_audio_url:
+                # Update recording chunk with response info
+                if recording_chunk:
+                    recording_chunk.response_audio_url = response_audio_url
+                    recording_chunk.processed = True
+                    recording_chunk.processed_at = datetime.now()
+                    recording_chunk.save()
+                
+                # Play the AI response audio file
+                response.play(response_audio_url)
+                
+                # Mark response as played
+                if recording_chunk:
+                    recording_chunk.response_played = True
+                    recording_chunk.save()
+                
+                # After playing response, start recording again for continuous conversation
+                response.record(
+                    action=f'/twilio/recording/{call.id}/',
+                    method='POST',
+                    max_length=30,
+                    play_beep=False,
+                    trim='trim-silence',
+                    recording_status_callback=f'/twilio/recording-status/{call.id}/',
+                    recording_status_callback_method='POST'
+                )
+            else:
+                # If no response available, continue recording anyway
+                response.record(
+                    action=f'/twilio/recording/{call.id}/',
+                    method='POST',
+                    max_length=30,
+                    play_beep=False,
+                    trim='trim-silence',
+                    recording_status_callback=f'/twilio/recording-status/{call.id}/',
+                    recording_status_callback_method='POST'
+                )
+        
         except Call.DoesNotExist:
-            response.say("I'm sorry, there was an error. Please try calling again.")
-            response.hangup()
-        except Exception as e:
-            print(f"Error handling recording: {e}")
-            response.say("I'm sorry, there was a technical issue. Please try again.")
-            response.hangup()
-        
-        return HttpResponse(str(response), content_type='text/xml')
-    
-    def continue_conversation(self, request, call_id):
-        """Continue conversation after processing"""
-        response = VoiceResponse()
-        call_sid = request.POST.get('CallSid', '')
-        
-        try:
-            # Here you would normally wait for AI processing to complete
-            # For now, we'll simulate a response
-            
-            # You can implement actual AI processing here
-            # ai_response_audio = self.get_ai_response_audio(call_id)
-            
-            # Play AI response (example)
-            response.say(
-                "I understand you're going through a difficult time. "
-                "Your feelings are valid, and you're not alone. "
-                "Would you like to continue talking?",
-                voice='Polly.Joanna'
-            )
-            
-            # Continue with another recording session
-            gather = Gather(
-                action=f'/twilio/user-choice/{call_id}/',
-                method='POST',
-                input='speech',
-                timeout=3,
-                speech_timeout='auto'
-            )
-            gather.say("Say 'continue' to keep talking, or 'end' to finish the call.")
-            response.append(gather)
-            
-            # Fallback if no response
-            response.redirect(f'/twilio/continue/{call_id}/')
-            
-        except Exception as e:
-            print(f"Error in continue conversation: {e}")
-            response.say("Thank you for calling. Take care of yourself.")
-            response.hangup()
-        
-        return HttpResponse(str(response), content_type='text/xml')
-    
-    def handle_user_choice(self, request, call_id):
-        """Handle user's choice to continue or end"""
-        speech_result = request.POST.get('SpeechResult', '').lower()
-        call_sid = request.POST.get('CallSid', '')
-        
-        response = VoiceResponse()
-        
-        if 'continue' in speech_result or 'yes' in speech_result:
-            # Continue with another recording
-            response.say("Please continue sharing what's on your mind.", voice='Polly.Joanna')
+            # If call not found, just continue recording
             response.record(
                 action=f'/twilio/recording/{call_id}/',
                 method='POST',
@@ -677,31 +653,90 @@ class TwilioVoiceService:
                 play_beep=False,
                 trim='trim-silence'
             )
-        else:
-            # End the call
-            response.say(
-                "Thank you for reaching out today. Remember, help is always available. "
-                "Take care of yourself, and don't hesitate to call again if you need support.",
-                voice='Polly.Joanna'
+        except Exception as e:
+            print(f"Error in handle_recording_complete: {e}")
+            # Continue recording on error
+            response.record(
+                action=f'/twilio/recording/{call_id}/',
+                method='POST',
+                max_length=30,
+                play_beep=False,
+                trim='trim-silence'
             )
-            
-            # Update call status
+        
+        return HttpResponse(str(response), content_type='text/xml')
+    
+    def wait_for_ai_response(self, call_id):
+        """
+        Wait for Sarvam AI response and return the audio file URL
+        In actual implementation, this would wait for Sarvam AI API to generate response
+        For now, returns a sample file from outputs folder
+        """
+        import time
+        
+        # Simulate waiting for AI response (in real implementation, poll for completion)
+        print(f"Waiting for AI response for call {call_id}...")
+        time.sleep(2)  # Simulate processing time
+        
+        # Check if response file exists in media/outputs folder
+        outputs_dir = os.path.join(settings.MEDIA_ROOT, 'outputs')
+        sample_response = os.path.join(outputs_dir, 'sample_response.wav')
+        
+        if os.path.exists(sample_response):
+            # Return the media URL for the sample file
+            response_url = f"{settings.MEDIA_URL}outputs/sample_response.wav"
+            print(f"AI response ready: {response_url}")
+            return response_url
+        
+        # If no sample file in media, check the main outputs directory
+        main_outputs_dir = os.path.join(settings.BASE_DIR, 'outputs')
+        main_sample_response = os.path.join(main_outputs_dir, 'sample_response.wav')
+        
+        if os.path.exists(main_sample_response):
+            # Copy to media directory and return URL
             try:
-                call = Call.objects.get(id=call_id)
-                call.status = 'completed'
-                call.end_time = datetime.now()
-                if call.start_time:
-                    call.duration = call.end_time - call.start_time
-                call.save()
-                
-                # Clean up active call tracking
-                if call_sid in self.active_calls:
-                    del self.active_calls[call_sid]
-                    
-            except Call.DoesNotExist:
-                pass
-            
-            response.hangup()
+                os.makedirs(outputs_dir, exist_ok=True)
+                shutil.copy2(main_sample_response, sample_response)
+                response_url = f"{settings.MEDIA_URL}outputs/sample_response.wav"
+                print(f"AI response ready (copied): {response_url}")
+                return response_url
+            except Exception as e:
+                print(f"Error copying sample file: {e}")
+        
+        print(f"No AI response file found for call {call_id}")
+        return None
+    
+    def continue_conversation(self, request, call_id):
+        """Continue conversation - simplified since we handle everything in recording complete"""
+        response = VoiceResponse()
+        
+        # Since we're using continuous recording cycle, just start recording again
+        response.record(
+            action=f'/twilio/recording/{call_id}/',
+            method='POST',
+            max_length=30,
+            play_beep=False,
+            trim='trim-silence',
+            recording_status_callback=f'/twilio/recording-status/{call_id}/',
+            recording_status_callback_method='POST'
+        )
+        
+        return HttpResponse(str(response), content_type='text/xml')
+    
+    def handle_user_choice(self, request, call_id):
+        """Handle user's choice to continue or end - simplified for continuous recording"""
+        response = VoiceResponse()
+        
+        # Since we're doing continuous recording, just continue with recording
+        response.record(
+            action=f'/twilio/recording/{call_id}/',
+            method='POST',
+            max_length=30,
+            play_beep=False,
+            trim='trim-silence',
+            recording_status_callback=f'/twilio/recording-status/{call_id}/',
+            recording_status_callback_method='POST'
+        )
         
         return HttpResponse(str(response), content_type='text/xml')
     
@@ -802,6 +837,8 @@ def twilio_status_webhook(request):
     call_sid = request.POST.get('CallSid', '')
     call_status = request.POST.get('CallStatus', '')
     
+    print(f"Call status update: {call_sid} - {call_status}")
+    
     # Update call status in database
     try:
         call = Call.objects.get(twilio_call_sid=call_sid)
@@ -811,17 +848,37 @@ def twilio_status_webhook(request):
             call.end_time = datetime.now()
             if call.start_time:
                 call.duration = call.end_time - call.start_time
+            
+            # Log recording chunks info
+            total_chunks = call.recording_chunks.count()
+            processed_chunks = call.recording_chunks.filter(processed=True).count()
+            responses_played = call.recording_chunks.filter(response_played=True).count()
+            
+            print(f"Call {call_sid} completed. Total chunks: {total_chunks}, Processed: {processed_chunks}, Responses played: {responses_played}")
+            
         elif call_status == 'failed':
             call.status = 'failed'
         elif call_status == 'busy':
             call.status = 'failed'
         elif call_status == 'no-answer':
             call.status = 'failed'
+        elif call_status == 'canceled':
+            call.status = 'failed'
             
         call.save()
         
+        # Clean up active call tracking
+        service = TwilioVoiceService()
+        if call_sid in service.active_calls:
+            active_call_data = service.active_calls[call_sid]
+            print(f"Cleaning up call {call_sid}. Total audio chunks tracked: {len(active_call_data.get('audio_chunks', []))}")
+            del service.active_calls[call_sid]
+        
     except Call.DoesNotExist:
+        print(f"Call {call_sid} not found in database")
         pass
+    except Exception as e:
+        print(f"Error updating call status: {e}")
     
     return HttpResponse('OK')
 

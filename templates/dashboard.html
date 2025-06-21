@@ -379,7 +379,7 @@
 
         <div style="margin-top: 20px; text-align: center;">
             <a href="/admin/" class="btn"><i class="fas fa-cog"></i> Admin Dashboard</a>
-            <a href="/api/calls/" class="btn"><i class="fas fa-code"></i> API Documentation</a>
+            <a href="/api/" class="btn"><i class="fas fa-code"></i> API Documentation</a>
         </div>
 
         <div class="last-updated" id="last-updated">
@@ -860,7 +860,7 @@
                 `;
 
                 // Load recent calls
-                const callsResponse = await fetch('/api/dashboard/calls/?limit=10');
+                const callsResponse = await fetch('/api/simple-dashboard/calls/?limit=10');
                 if (!callsResponse.ok) {
                     throw new Error(`Calls API error: ${callsResponse.status}`);
                 }
@@ -868,7 +868,20 @@
                 console.log('Calls loaded:', callsData);
                 
                 const calls = callsData.results || callsData;
-                if (!calls || calls.length === 0) {
+                console.log('Processed calls data:', calls);
+                console.log('Is calls an array?', Array.isArray(calls));
+                
+                if (!calls || !Array.isArray(calls)) {
+                    console.error('Calls data is not an array:', calls);
+                    document.getElementById('calls-list').innerHTML = `
+                        <div style="padding: 20px; text-align: center; color: #e74c3c;">
+                            Error: Invalid calls data format
+                        </div>
+                    `;
+                    return;
+                }
+                
+                if (calls.length === 0) {
                     document.getElementById('calls-list').innerHTML = `
                         <div style="padding: 20px; text-align: center; color: #7f8c8d;">
                             No calls found

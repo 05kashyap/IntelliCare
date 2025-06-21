@@ -21,6 +21,8 @@ class Call(models.Model):
     end_time = models.DateTimeField(null=True, blank=True)
     duration = models.DurationField(null=True, blank=True, help_text="Call duration")
     audio_file_url = models.URLField(null=True, blank=True, help_text="URL to recorded audio")
+    local_recording_path = models.CharField(max_length=500, null=True, blank=True, help_text="Local path to stored recording")
+    local_recording_url = models.CharField(max_length=500, null=True, blank=True, help_text="Local URL to access recording")
     transcription = models.TextField(null=True, blank=True, help_text="Call transcription")
     
     # Location information (if available)

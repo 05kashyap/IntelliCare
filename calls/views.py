@@ -1,7 +1,7 @@
 from rest_framework import viewsets, status
-from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.decorators import action, api_view, permission_classes, authentication_classes
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.permissions import IsAuthenticated, AllowAny, BasePermission
 from django.shortcuts import get_object_or_404, render
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
@@ -12,6 +12,29 @@ from twilio.rest import Client
 from django.conf import settings
 from .models import Call, Memory, CallNote, EmergencyContact
 from .serializers import CallSerializer, MemorySerializer, CallNoteSerializer, EmergencyContactSerializer
+from .ai_service import (
+    twilio_voice_webhook, twilio_recording_webhook, twilio_continue_webhook,
+    twilio_user_choice_webhook, twilio_status_webhook
+)
+
+
+class DashboardPermission:
+    """Custom permission for dashboard endpoints - always allow access"""
+    def has_permission(self, request, view):
+        return True
+    
+    def has_object_permission(self, request, view, obj):
+        return True
+
+class IsDashboardAccess(BasePermission):
+    """
+    Custom permission to allow unauthenticated access to dashboard endpoints
+    """
+    def has_permission(self, request, view):
+        return True  # Allow all access
+    
+    def has_object_permission(self, request, view, obj):
+        return True  # Allow all object access
 
 
 class CallViewSet(viewsets.ModelViewSet):
@@ -109,7 +132,8 @@ class DashboardCallViewSet(viewsets.ReadOnlyModelViewSet):
     """Read-only ViewSet for Call model for dashboard"""
     queryset = Call.objects.all()
     serializer_class = CallSerializer
-    permission_classes = [AllowAny]
+    permission_classes = [IsDashboardAccess]  # Use custom permission
+    authentication_classes = []  # No authentication required
     
     def list(self, request, *args, **kwargs):
         """Override list to handle limit parameter properly"""
@@ -133,141 +157,24 @@ class DashboardMemoryViewSet(viewsets.ReadOnlyModelViewSet):
     """Read-only ViewSet for Memory model for dashboard"""
     queryset = Memory.objects.all()
     serializer_class = MemorySerializer
-    permission_classes = [AllowAny]
+    permission_classes = [IsDashboardAccess]  # Use custom permission
+    authentication_classes = []  # No authentication required
+    authentication_classes = []  # No authentication required
 
 
-# Twilio webhook views
-@csrf_exempt
-def twilio_voice_webhook(request):
-    """Handle incoming calls from Twilio"""
-    if request.method == 'POST':
-        # Get call data from Twilio
-        call_sid = request.POST.get('CallSid')
-        from_number = request.POST.get('From')
-        to_number = request.POST.get('To')
-        call_status = request.POST.get('CallStatus')
-        caller_city = request.POST.get('CallerCity', '')
-        caller_state = request.POST.get('CallerState', '')
-        caller_country = request.POST.get('CallerCountry', '')
-        
-        # Create or update call record
-        call, created = Call.objects.get_or_create(
-            twilio_call_sid=call_sid,
-            defaults={
-                'phone_number': from_number,
-                'status': 'in_progress',
-                'caller_city': caller_city,
-                'caller_state': caller_state,
-                'caller_country': caller_country,
-            }
-        )
-        
-        # Create TwiML response
-        response = VoiceResponse()
-        
-        # Welcome message
-        response.say(
-            "Hello, you've reached the crisis support hotline. "
-            "You are not alone, and we're here to help. "
-            "Please hold while we connect you with our AI assistant.",
-            voice='alice'
-        )
-        
-        # Record the call
-        response.record(
-            action=f'/calls/twilio/recording/{call.id}/',
-            method='POST',
-            max_length=3600,  # 1 hour max
-            finish_on_key='#',
-            play_beep=True
-        )
-        
-        return JsonResponse({'twiml': str(response)}, content_type='application/xml')
-    
-    return JsonResponse({'error': 'Method not allowed'}, status=405)
-
-
-@csrf_exempt
-def twilio_recording_webhook(request, call_id):
-    """Handle recording completion from Twilio"""
-    if request.method == 'POST':
-        recording_url = request.POST.get('RecordingUrl')
-        recording_duration = request.POST.get('RecordingDuration')
-        call_duration = request.POST.get('CallDuration')
-        
-        try:
-            call = Call.objects.get(id=call_id)
-            call.audio_file_url = recording_url
-            if recording_duration:
-                from datetime import timedelta
-                call.duration = timedelta(seconds=int(recording_duration))
-            call.status = 'completed'
-            call.save()
-            
-            # Here you would typically trigger your audio processing
-            # and LLM agent to generate memories
-            # process_call_audio.delay(call.id)  # Celery task example
-            
-        except Call.DoesNotExist:
-            return JsonResponse({'error': 'Call not found'}, status=404)
-        
-        return JsonResponse({'success': True})
-    
-    return JsonResponse({'error': 'Method not allowed'}, status=405)
-
-
-@csrf_exempt
-def twilio_status_webhook(request):
-    """Handle call status updates from Twilio"""
-    if request.method == 'POST':
-        call_sid = request.POST.get('CallSid')
-        call_status = request.POST.get('CallStatus')
-        call_duration = request.POST.get('CallDuration')
-        
-        try:
-            call = Call.objects.get(twilio_call_sid=call_sid)
-            
-            # Map Twilio status to our status
-            status_mapping = {
-                'ringing': 'incoming',
-                'in-progress': 'in_progress',
-                'completed': 'completed',
-                'busy': 'failed',
-                'no-answer': 'failed',
-                'canceled': 'disconnected',
-                'failed': 'failed'
-            }
-            
-            if call_status in status_mapping:
-                call.status = status_mapping[call_status]
-            
-            if call_duration:
-                from datetime import timedelta
-                call.duration = timedelta(seconds=int(call_duration))
-            
-            if call_status in ['completed', 'failed', 'canceled']:
-                from django.utils import timezone
-                call.end_time = timezone.now()
-            
-            call.save()
-            
-        except Call.DoesNotExist:
-            return JsonResponse({'error': 'Call not found'}, status=404)
-        
-        return JsonResponse({'success': True})
-    
-    return JsonResponse({'error': 'Method not allowed'}, status=405)
-
+# Twilio webhook views are now in ai_service.py
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@authentication_classes([])
+@permission_classes([IsDashboardAccess])
 def dashboard_view(request):
     """Dashboard view"""
     return render(request, 'dashboard.html')
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@authentication_classes([])
+@permission_classes([IsDashboardAccess])
 def dashboard_stats(request):
     """Get dashboard statistics"""
     from django.db.models import Count, Avg
@@ -320,7 +227,8 @@ def dashboard_stats(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@authentication_classes([])
+@permission_classes([IsDashboardAccess])
 def dashboard_historical_data(request):
     """Get historical data for dashboard charts"""
     from django.db.models import Count, Avg
@@ -418,3 +326,88 @@ def test_view(request):
 def debug_view(request):
     """Debug view"""
     return render(request, 'debug.html')
+
+
+# Simple dashboard API views (bypass DRF authentication)
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+
+@csrf_exempt
+def simple_dashboard_calls(request):
+    """Simple dashboard calls endpoint without DRF"""
+    if request.method == 'GET':
+        try:
+            limit = int(request.GET.get('limit', 10))
+            calls = Call.objects.all().order_by('-start_time')[:limit]
+            
+            results = []
+            for call in calls:
+                # Get the latest memory/risk level for this call
+                latest_memory = call.memories.order_by('-created_at').first()
+                latest_risk_level = None
+                if latest_memory:
+                    latest_risk_level = {
+                        'level': latest_memory.risk_level,
+                        'display': latest_memory.get_risk_level_display()
+                    }
+                
+                # Format call duration
+                call_duration_formatted = 'N/A'
+                if call.duration:
+                    total_seconds = int(call.duration.total_seconds())
+                    minutes = total_seconds // 60
+                    seconds = total_seconds % 60
+                    call_duration_formatted = f"{minutes}:{seconds:02d}"
+                
+                results.append({
+                    'id': str(call.id),
+                    'phone_number': call.phone_number,
+                    'status': call.status,
+                    'start_time': call.start_time.isoformat() if call.start_time else None,
+                    'end_time': call.end_time.isoformat() if call.end_time else None,
+                    'duration': str(call.duration) if call.duration else None,
+                    'call_duration_formatted': call_duration_formatted,
+                    'caller_city': call.caller_city,
+                    'caller_state': call.caller_state,
+                    'caller_country': call.caller_country,
+                    'latest_risk_level': latest_risk_level,
+                })
+            
+            return JsonResponse({
+                'results': results,
+                'count': len(results)
+            })
+        except Exception as e:
+            return JsonResponse({'error': str(e)}, status=500)
+    
+    return JsonResponse({'error': 'Method not allowed'}, status=405)
+
+@csrf_exempt
+def simple_dashboard_memories(request):
+    """Simple dashboard memories endpoint without DRF"""
+    if request.method == 'GET':
+        try:
+            limit = int(request.GET.get('limit', 10))
+            memories = Memory.objects.all().order_by('-created_at')[:limit]
+            
+            results = []
+            for memory in memories:
+                results.append({
+                    'id': str(memory.id),
+                    'call_id': str(memory.call.id),
+                    'risk_level': memory.risk_level,
+                    'primary_emotion': memory.primary_emotion,
+                    'emotion_intensity': memory.emotion_intensity,
+                    'conversation_summary': memory.conversation_summary,
+                    'follow_up_needed': memory.follow_up_needed,
+                    'created_at': memory.created_at.isoformat() if memory.created_at else None,
+                })
+            
+            return JsonResponse({
+                'results': results,
+                'count': len(results)
+            })
+        except Exception as e:
+            return JsonResponse({'error': str(e)}, status=500)
+    
+    return JsonResponse({'error': 'Method not allowed'}, status=405)

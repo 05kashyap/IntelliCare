@@ -48,7 +48,7 @@
                 statusDiv.innerHTML = 'Loading calls...';
                 
                 // Load recent calls
-                const callsResponse = await fetch('/api/dashboard/calls/?limit=5');
+                const callsResponse = await fetch('/api/dashboard/?limit=5');
                 if (!callsResponse.ok) {
                     throw new Error(`Calls API error: ${callsResponse.status} ${callsResponse.statusText}`);
                 }

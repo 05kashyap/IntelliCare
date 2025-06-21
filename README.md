@@ -17,7 +17,7 @@ A Django-based backend system for managing a suicide prevention hotline with AI 
 
 ```
 suicide_hotline/
-├── calls/                          # Main app for call and memory management
+├──                           # Main app for call and memory management
 │   ├── models.py                   # Database models (Call, Memory, CallNote, EmergencyContact)
 │   ├── admin.py                    # Admin interface configuration
 │   ├── views.py                    # API views and Twilio webhooks
@@ -125,10 +125,10 @@ Access the admin dashboard at `http://127.0.0.1:8000/admin/`
 ## API Endpoints
 
 ### Call Management
-- `GET /api/calls/` - List all calls
-- `GET /api/calls/{id}/` - Get specific call
-- `GET /api/calls/{id}/memories/` - Get memories for a call
-- `POST /api/calls/{id}/add_note/` - Add note to a call
+- `GET /api/` - List all calls
+- `GET /api/{id}/` - Get specific call
+- `GET /api/{id}/memories/` - Get memories for a call
+- `POST /api/{id}/add_note/` - Add note to a call
 
 ### Memory Management
 - `GET /api/memories/` - List all memories
@@ -255,13 +255,13 @@ TWILIO_PHONE_NUMBER=your_production_phone_number
 
 ### Adding New Features
 
-1. Create new models in `calls/models.py`
+1. Create new models in `models.py`
 2. Create migrations: `python manage.py makemigrations`
 3. Apply migrations: `python manage.py migrate`
-4. Add admin configuration in `calls/admin.py`
-5. Create serializers in `calls/serializers.py`
-6. Add views in `calls/views.py`
-7. Update URLs in `calls/urls.py`
+4. Add admin configuration in `admin.py`
+5. Create serializers in `serializers.py`
+6. Add views in `views.py`
+7. Update URLs in `urls.py`
 
 ### Testing
 
@@ -276,7 +276,7 @@ Use tools like Postman or curl to test API endpoints:
 
 ```bash
 # Get all calls
-curl -H "Accept: application/json" http://127.0.0.1:8000/api/calls/
+curl -H "Accept: application/json" http://127.0.0.1:8000/api/
 
 # Get dashboard stats
 curl -H "Accept: application/json" http://127.0.0.1:8000/api/dashboard/stats/

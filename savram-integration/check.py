@@ -11,6 +11,8 @@ from sarvamai import SarvamAI
 from sarvamai.play import save
 from memory_integration import init_memory
 import io
+from transformers import AutoTokenizer
+import asyncio
 
 
 # Setup
@@ -22,21 +24,13 @@ TARGET_CONTEXT_LIMIT = 125000  # 7k buffer for reply + overhead
 
 os.makedirs(INPUT_PATH, exist_ok=True)
 os.makedirs(OUTPUT_PATH, exist_ok=True)
-memory = init_memory()
+memory = asyncio.run(init_memory())
 
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s: %(message)s')
 load_dotenv()
 client = SarvamAI(api_subscription_key=os.environ.get("SARVAM_API_KEY"))
-from transformers import AutoTokenizer
 
-tokenizer = AutoTokenizer.from_pretrained("mistralai/Mistral-Small-24B-Instruct-2501")
-
-def count_tokens(text: str) -> int:
-    return len(tokenizer.encode(text, add_special_tokens=False))
-
-def count_message_tokens(messages):
-    return sum(count_tokens(msg["content"]) for msg in messages)
 
 
 system_prompt = """
@@ -67,6 +61,7 @@ If the user switches the speaking language, you should adapt to their language. 
 
 """
 
+tokenizer = AutoTokenizer.from_pretrained("mistralai/Mistral-Small-24B-Instruct-2501")
 def record_until_enter(filename: str):
     audio_chunks = []
     q_audio = queue.Queue()
@@ -110,49 +105,8 @@ def transcribe_audio(filepath):
         return json.loads(response.json())
     except Exception as e:
         logging.error(f"Transcription failed: {e}")
-        return {"transcript": "", "language_code": "en-IN"}
+        return {"transcript": "", "language_code": "en"}
 
-def query_llm(conversation, user_input):
-    conversation.append({"role": "user", "content": user_input})
-    try:
-        relevant_memories = memory.search(user_input, limit=3, user_id="default")  # fixed typo: defualt → default
-        memories_str = "\n".join(f"- {entry['memory']}" for entry in relevant_memories["results"])
-
-        logging.info("Retrieved Memories:")
-        for idx, entry in enumerate(relevant_memories["results"]):
-            logging.info(f"{idx+1}. {entry['memory']}")
-
-        system_msg = {
-            "role": "system",
-            "content": system_prompt.format(memories_str=memories_str)
-        }
-
-        full_context = [system_msg] + conversation
-        print(full_context)
-
-        while count_message_tokens(full_context) > TARGET_CONTEXT_LIMIT:
-            if len(conversation) >= 2:
-                conversation.pop(0)
-                conversation.pop(0)
-                full_context = [system_msg] + conversation
-            else:
-                break
-
-        logging.info(f"Token count before LLM call: {count_message_tokens(full_context)}")
-
-        res = client.chat.completions(messages=full_context, temperature=0.4)
-        reply = res.choices[0].message.content
-        conversation.append({"role": "assistant", "content": reply})
-
-        # update only alternatively to prevent latency
-        if len(full_context)%2 ==0 :
-            memory.add(conversation, user_id="default")
-
-        return reply, conversation
-
-    except Exception as e:
-        logging.error(f"LLM error: {e}")
-        return "I'm here to help. Please try again.", conversation
 
 
 def identify_language(text):
@@ -161,9 +115,9 @@ def identify_language(text):
         return json.loads(res.json()).get("language_code", "en")
     except Exception as e:
         logging.warning(f"Lang ID fallback: {e}")
-        return "en"
+        return "en-IN"
 
-def text_to_audio(lang_code_from_speech, text):
+def text_to_audio(lang_code_from_speech, text, filename=None):
     language_code = identify_language(text) or lang_code_from_speech
     try:
         tts_response = client.text_to_speech.convert(
@@ -187,14 +141,80 @@ def text_to_audio(lang_code_from_speech, text):
         logging.error(f"TTS playback error: {e}")
 
 
-
 def conversation_should_end(response: str):
     return any(phrase in response.lower() for phrase in [
         "<end conversation>", "take care", "we are here for you", "reach out anytime"
     ])
 
-def simulate_conversation():
-    conversation = []  # Don't include system prompt here, it's handled inside query_llm
+
+async def query_llm(conversation, user_input, memory, client):
+    """
+    Query the LLM with user input, manage conversation context, and add memories in the background.
+    Also return the retrieved memories for display.
+    
+    Args:
+        conversation: List of conversation messages (user and assistant).
+        user_input: The latest user input.
+        memory: The memory integration object.
+        client: The SarvamAI client for LLM calls.
+    
+    Returns:
+        Tuple of (assistant reply, updated conversation, retrieved memories).
+    """
+    conversation.append({"role": "user", "content": user_input})
+
+    try:
+        # Search for relevant memories
+        relevant_memories = await memory.search(user_input, limit=2, user_id="default")
+        memories_str = "\n".join(f"- {entry['memory']}" for entry in relevant_memories.get("results", [])) or "No relevant memories found."
+        logging.info(f"Retrieved memories:\n{memories_str}")
+        
+        system_msg = {"role": "system", "content": system_prompt.format(memories_str=memories_str)}
+
+        # Manage conversation context to stay within token limit
+        full_context = [system_msg] + conversation
+        while count_message_tokens(full_context) > TARGET_CONTEXT_LIMIT and len(conversation) > 1:
+            conversation.pop(0)  # Remove oldest message
+            full_context = [system_msg] + conversation
+            logging.info(f"Trimmed conversation to {len(conversation)} messages to fit token limit.")
+
+        logging.info(f"Token count before LLM call: {count_message_tokens(full_context)}")
+
+        # Call the LLM
+        res = client.chat.completions(messages=full_context, temperature=0.2)
+        reply = res.choices[0].message.content
+        conversation.append({"role": "assistant", "content": reply})
+
+        # Add memory in the background with error handling
+        async def background_memory_add():
+            try:
+                await memory.add(conversation, user_id="default")
+                logging.info("Memory added successfully in the background.")
+            except Exception as e:
+                logging.error(f"Failed to add memory in the background: {e}")
+
+        asyncio.create_task(background_memory_add())
+
+        return reply, conversation, memories_str
+
+    except Exception as e:
+        logging.error(f"LLM query failed: {e}")
+        return "I'm sorry, something went wrong. I'm here to help—please tell me more.", conversation, "No memories retrieved due to error."
+
+def count_tokens(text: str) -> int:
+    """Count tokens in a text string using the tokenizer."""
+    try:
+        return len(tokenizer.encode(text, add_special_tokens=False))
+    except Exception as e:
+        logging.error(f"Token counting failed: {e}")
+        return 0
+
+def count_message_tokens(messages):
+    """Count total tokens in a list of messages."""
+    return sum(count_tokens(msg["content"]) for msg in messages)
+
+async def simulate_conversation():
+    conversation = []
     for i in range(20):
         logging.info(f"--- Turn {i+1} ---")
 
@@ -213,12 +233,11 @@ def simulate_conversation():
 
         logging.info(f"Transcript: {transcript} | Lang: {lang_code}")
 
-        reply, conversation = query_llm(conversation, transcript)
-
+        reply, conversation, retrieved_memories = await query_llm(conversation, transcript, memory, client)
         logging.info(f"Assistant reply: {reply}")
+        logging.info(f"Memories used in this turn:\n{retrieved_memories}")
 
         text_to_audio(lang_code, reply)
-
         if conversation_should_end(reply):
             logging.info("Assistant ended the conversation.")
             break
@@ -227,7 +246,7 @@ def simulate_conversation():
 if __name__ == "__main__":
     try:
         logging.info("Starting hotline conversation...")
-        simulate_conversation()
+        asyncio.run(simulate_conversation())
     except KeyboardInterrupt:
         logging.info("Session interrupted by user.")
     except Exception as e:

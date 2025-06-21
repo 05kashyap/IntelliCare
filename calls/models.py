@@ -24,6 +24,7 @@ class Call(models.Model):
     local_recording_path = models.CharField(max_length=500, null=True, blank=True, help_text="Local path to stored recording")
     local_recording_url = models.CharField(max_length=500, null=True, blank=True, help_text="Local URL to access recording")
     transcription = models.TextField(null=True, blank=True, help_text="Call transcription")
+    conversation_state = models.JSONField(null=True, blank=True, help_text="Conversation history for AI processing")
     
     # Location information (if available)
     caller_city = models.CharField(max_length=100, null=True, blank=True)

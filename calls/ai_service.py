@@ -8,6 +8,8 @@ import asyncio
 import threading
 import shutil
 import hashlib
+import time
+import traceback
 from django.conf import settings
 from django.http import JsonResponse, HttpResponse
 from django.views.decorators.csrf import csrf_exempt
@@ -15,10 +17,10 @@ from django.views.decorators.http import require_http_methods
 from twilio.twiml.voice_response import VoiceResponse, Gather, Say, Play, Record
 from twilio.rest import Client
 from .models import Call, Memory, RecordingChunk
+from .sarv import transcribe_input, query_llm, convert_to_audio_and_save, system_prompt
 import os
 from datetime import datetime, timedelta
 import uuid
-
 
 class LocalRecordingStorage:
     """Handle local storage of call recordings"""
@@ -273,107 +275,7 @@ class AIAgentService:
         
         # Mock response for demonstration
         return {
-            'risk_assessment': {
-                'level': 'moderate',
-                'factors': ['social isolation', 'recent job loss'],
-                'protective_factors': ['family support', 'previous therapy experience'],
-                'confidence': 0.85
-            },
-            'emotional_analysis': {
-                'primary_emotion': 'sad',
-                'intensity': 7,
-                'detected_emotions': ['sad', 'anxious', 'hopeless']
-            },
-            'conversation_analysis': {
-                'summary': 'Caller experiencing depression following job loss. Expressed some hopeless thoughts but no immediate suicide plan. Responsive to intervention.',
-                'key_topics': ['unemployment', 'financial stress', 'depression', 'family support'],
-                'intervention_techniques': ['active listening', 'empathy', 'resource sharing', 'safety assessment'],
-                'safety_plan_needed': True
-            },
-            'chat_messages': [
-                {'role': 'caller', 'message': 'I lost my job last week and I don\'t know what to do anymore'},
-                {'role': 'ai', 'message': 'I can hear how difficult this situation is for you. Job loss can be really overwhelming. Can you tell me more about what you\'re feeling right now?'},
-                {'role': 'caller', 'message': 'I feel like such a failure. My family is counting on me and I let them down'},
-                {'role': 'ai', 'message': 'Those feelings of disappointment are understandable, but losing a job doesn\'t make you a failure as a person. Let\'s talk about the support you have available and some next steps we can explore together.'}
-            ],
-            'resources_recommended': [
-                'National Suicide Prevention Lifeline',
-                'Local unemployment office',
-                'Career counseling services',
-                'Financial assistance programs'
-            ],
-            'follow_up_required': True,
-            'transcription': 'Full call transcription would be here...'
         }
-    
-    def _create_memory_from_response(self, call, agent_response):
-        """Create Memory record from AI agent response"""
-        
-        risk_data = agent_response.get('risk_assessment', {})
-        emotion_data = agent_response.get('emotional_analysis', {})
-        conversation_data = agent_response.get('conversation_analysis', {})
-        
-        memory = Memory.objects.create(
-            call=call,
-            # Risk assessment
-            risk_level=risk_data.get('level', 'unknown'),
-            risk_factors=risk_data.get('factors', []),
-            protective_factors=risk_data.get('protective_factors', []),
-            confidence_score=risk_data.get('confidence'),
-            
-            # Emotional analysis
-            primary_emotion=emotion_data.get('primary_emotion'),
-            emotion_intensity=emotion_data.get('intensity'),
-            emotions_detected=emotion_data.get('detected_emotions', []),
-            
-            # Conversation data
-            conversation_summary=conversation_data.get('summary', ''),
-            key_topics=conversation_data.get('key_topics', []),
-            intervention_techniques_used=conversation_data.get('intervention_techniques', []),
-            chat_messages=agent_response.get('chat_messages', []),
-            
-            # Follow-up and resources
-            follow_up_needed=agent_response.get('follow_up_required', False),
-            resources_provided=agent_response.get('resources_recommended', []),
-            
-            # Safety planning
-            immediate_safety_plan=self._generate_safety_plan(conversation_data),
-        )
-        
-        return memory
-    
-    def _generate_safety_plan(self, conversation_data):
-        """Generate safety plan based on conversation analysis"""
-        if conversation_data.get('safety_plan_needed'):
-            return """
-            Immediate Safety Plan:
-            1. Remove or secure any means of self-harm
-            2. Contact support person: [family member/friend identified]
-            3. Call crisis hotline if feelings worsen: 988
-            4. Use coping strategies: [breathing exercises, grounding techniques]
-            5. Follow up with mental health professional within 48 hours
-            """
-        return ""
-    
-    def get_real_time_analysis(self, call_id, audio_chunk):
-        """
-        Get real-time analysis during an ongoing call
-        This could be used for live risk assessment
-        """
-        payload = {
-            'call_id': call_id,
-            'audio_chunk': audio_chunk,
-            'analysis_type': 'real_time_risk'
-        }
-        
-        # Mock response - replace with actual API call
-        return {
-            'current_risk_level': 'moderate',
-            'emotional_state': 'distressed',
-            'intervention_suggestion': 'Focus on safety assessment',
-            'confidence': 0.75
-        }
-
 
 # Example usage in your Django views or Celery tasks
 def process_call_audio_task(call_id):
@@ -602,9 +504,8 @@ class TwilioVoiceService:
                     'timestamp': datetime.now().isoformat()
                 })
             
-            # Wait for Sarvam AI response (simulated by checking outputs folder)
-            # In real implementation, this would trigger Sarvam AI API call
-            response_audio_url = self.wait_for_ai_response(call_id)
+            # Wait for Sarvam AI response - pass recording URL for processing
+            response_audio_url = self.wait_for_ai_response(call_id, recording_url)
             
             if response_audio_url:
                 # Update recording chunk with response info
@@ -666,26 +567,292 @@ class TwilioVoiceService:
         
         return HttpResponse(str(response), content_type='text/xml')
     
-    def wait_for_ai_response(self, call_id):
+    def wait_for_ai_response(self, call_id, recording_url=None):
         """
-        Wait for Sarvam AI response and return the audio file URL
-        In actual implementation, this would wait for Sarvam AI API to generate response
-        For now, returns a sample file from outputs folder
+        Process audio with Sarvam AI and return the audio file URL
         """
-        import time
+        print(f"=== Starting AI processing for call {call_id} ===")
+        print(f"Recording URL: {recording_url}")
         
-        # Simulate waiting for AI response (in real implementation, poll for completion)
-        print(f"Waiting for AI response for call {call_id}...")
-        time.sleep(2)  # Simulate processing time
+        try:
+            # If we have a recording URL, download it first
+            if recording_url:
+                local_audio_path = self._download_audio_for_processing(recording_url, call_id)
+                if not local_audio_path:
+                    print(f"FALLBACK TRIGGERED: Failed to download audio for call {call_id}")
+                    return self._get_fallback_response()
+            else:
+                print(f"FALLBACK TRIGGERED: No recording URL provided for call {call_id}")
+                return self._get_fallback_response()
+            
+            # Process with Sarvam AI
+            print(f"Processing audio with Sarvam AI...")
+            response_audio_path = self._process_with_sarvam_ai(local_audio_path, call_id)
+            
+            if response_audio_path and os.path.exists(response_audio_path):
+                print(f"Sarvam AI processing completed successfully")
+                # Move response to media/outputs directory and return URL
+                response_url = self._save_response_to_media(response_audio_path, call_id)
+                if response_url:
+                    print(f"=== AI processing SUCCESS for call {call_id} ===")
+                    print(f"Response URL: {response_url}")
+                    return response_url
+                else:
+                    print(f"FALLBACK TRIGGERED: Failed to save response to media for call {call_id}")
+                    return self._get_fallback_response()
+            else:
+                print(f"FALLBACK TRIGGERED: Sarvam AI processing failed for call {call_id}")
+                print(f"Response path: {response_audio_path}")
+                print(f"Path exists: {os.path.exists(response_audio_path) if response_audio_path else 'N/A'}")
+                return self._get_fallback_response()
+                
+        except Exception as e:
+            print(f"FALLBACK TRIGGERED: Error processing audio with Sarvam AI: {e}")
+            import traceback
+            traceback.print_exc()
+            return self._get_fallback_response()
+    
+    def _download_audio_for_processing(self, recording_url, call_id):
+        """Download audio from Twilio for Sarvam AI processing"""
+        try:
+            print(f"Downloading audio from Twilio for call {call_id}")
+            print(f"Recording URL: {recording_url}")
+            
+            # Download audio from Twilio
+            audio_response = requests.get(recording_url, auth=(
+                settings.TWILIO_ACCOUNT_SID,
+                settings.TWILIO_AUTH_TOKEN
+            ))
+            
+            print(f"Twilio response status: {audio_response.status_code}")
+            
+            if audio_response.status_code == 200:
+                # Create temporary file for processing
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                filename = f"input_{timestamp}_{str(call_id)[:8]}.wav"
+                
+                # Save to a processing directory
+                processing_dir = os.path.join(settings.MEDIA_ROOT, 'processing')
+                os.makedirs(processing_dir, exist_ok=True)
+                
+                input_file_path = os.path.join(processing_dir, filename)
+                
+                with open(input_file_path, 'wb') as f:
+                    f.write(audio_response.content)
+                
+                file_size = len(audio_response.content)
+                print(f"Downloaded audio for processing: {input_file_path} (size: {file_size} bytes)")
+                
+                # Verify file was created
+                if os.path.exists(input_file_path):
+                    actual_size = os.path.getsize(input_file_path)
+                    print(f"File verification: {input_file_path} exists (size: {actual_size} bytes)")
+                    return input_file_path
+                else:
+                    print(f"ERROR: Downloaded file not found: {input_file_path}")
+                    return None
+            else:
+                print(f"Failed to download audio: HTTP {audio_response.status_code}")
+                return None
+                
+        except Exception as e:
+            print(f"Error downloading audio for processing: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
+    def _process_with_sarvam_ai(self, input_audio_path, call_id):
+        """Process audio using Sarvam AI functions"""
+        try:
+            print(f"Processing audio with Sarvam AI for call {call_id}")
+            print(f"Input audio path: {input_audio_path}")
+            
+            # Verify input file exists
+            if not os.path.exists(input_audio_path):
+                print(f"Input audio file does not exist: {input_audio_path}")
+                return None
+            
+            # Get conversation state for this call
+            conversation = self._get_conversation_state(call_id)
+            
+            # Generate output file path with call ID for matching
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            output_filename = f"response_{timestamp}_{str(call_id)[:8]}.wav"
+            
+            # Save to processing directory first
+            processing_dir = os.path.join(settings.MEDIA_ROOT, 'processing')
+            os.makedirs(processing_dir, exist_ok=True)
+            response_path = os.path.join(processing_dir, output_filename)
+            
+            print(f"Expected output path: {response_path}")
+            
+            # Process with Sarvam AI
+            from .sarv import process_single_audio_input
+            print(f"Calling Sarvam AI with input: {input_audio_path}, output: {response_path}")
+            result = process_single_audio_input(input_audio_path, response_path, conversation)
+            
+            print(f"Sarvam AI result: {result}")
+            
+            if result["success"]:
+                # Wait for the output file to be created (async file creation)
+                file_created = self._wait_for_file_creation(response_path, timeout=30)
+                if not file_created:
+                    print(f"ERROR: Sarvam AI reported success but output file not created within timeout: {response_path}")
+                    return None
+                
+                file_size = os.path.getsize(response_path)
+                print(f"Output file created successfully: {response_path} (size: {file_size} bytes)")
+                
+                # Save updated conversation state
+                self._save_conversation_state(call_id, result["conversation_history"])
+                
+                print(f"Sarvam AI processing successful for call {call_id}")
+                print(f"Transcription: {result['transcription']}")
+                print(f"Response: {result['response_text']}")
+                
+                # Check if conversation should end
+                if result["should_end"]:
+                    print(f"Conversation ending for call {call_id}")
+                    # You might want to handle call ending here
+                
+                return response_path
+            else:
+                print(f"Sarvam AI processing failed for call {call_id}: {result.get('error', 'Unknown error')}")
+                return None
+                
+        except Exception as e:
+            print(f"Error processing with Sarvam AI: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
+    def _get_conversation_state(self, call_id):
+        """Get conversation state for a call"""
+        try:
+            call = Call.objects.get(id=call_id)
+            
+            # Get existing conversation from conversation_state field
+            if call.conversation_state:
+                return call.conversation_state
+            else:
+                return [{"role": "system", "content": system_prompt}]
+                
+        except Call.DoesNotExist:
+            return [{"role": "system", "content": system_prompt}]
+        except Exception as e:
+            print(f"Error getting conversation state: {e}")
+            return [{"role": "system", "content": system_prompt}]
+    
+    def _save_conversation_state(self, call_id, conversation):
+        """Save conversation state for a call"""
+        try:
+            call = Call.objects.get(id=call_id)
+            # Save conversation state in the new field
+            call.conversation_state = conversation
+            
+            # Also update transcription field with the last user message for backward compatibility
+            if conversation:
+                last_user_message = ""
+                for msg in reversed(conversation):
+                    if msg.get("role") == "user":
+                        last_user_message = msg.get("content", "")
+                        break
+                
+                if last_user_message:
+                    if call.transcription:
+                        call.transcription += f"\n{last_user_message}"
+                    else:
+                        call.transcription = last_user_message
+            
+            call.save()
+                    
+        except Call.DoesNotExist:
+            pass
+        except Exception as e:
+            print(f"Error saving conversation state: {e}")
+    
+    def _wait_for_file_creation(self, file_path, timeout=30, poll_interval=0.5):
+        """
+        Wait for a file to be created, with timeout
+        Returns True if file is created, False if timeout reached
+        """
+        print(f"Waiting for file creation: {file_path} (timeout: {timeout}s)")
+        start_time = time.time()
         
-        # Check if response file exists in media/outputs folder
+        while time.time() - start_time < timeout:
+            if os.path.exists(file_path):
+                # File exists, but let's also check if it has content
+                try:
+                    file_size = os.path.getsize(file_path)
+                    if file_size > 0:
+                        print(f"File created successfully: {file_path} (size: {file_size} bytes, waited: {time.time() - start_time:.1f}s)")
+                        return True
+                    else:
+                        # File exists but is empty, wait a bit more
+                        print(f"File exists but is empty, waiting... ({time.time() - start_time:.1f}s)")
+                except OSError:
+                    # File might be being written to, wait a bit more
+                    pass
+            
+            time.sleep(poll_interval)
+        
+        print(f"Timeout waiting for file creation: {file_path} (waited: {timeout}s)")
+        return False
+    
+    def _save_response_to_media(self, response_path, call_id):
+        """Save response audio to media/outputs directory and return URL"""
+        try:
+            print(f"Saving response to media for call {call_id}")
+            print(f"Source path: {response_path}")
+            
+            # Verify source file exists
+            if not os.path.exists(response_path):
+                print(f"ERROR: Source response file does not exist: {response_path}")
+                return None
+            
+            outputs_dir = os.path.join(settings.MEDIA_ROOT, 'outputs')
+            os.makedirs(outputs_dir, exist_ok=True)
+            
+            # Create unique filename for this response with call ID
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"response_{timestamp}_{str(call_id)[:8]}.wav"
+            media_path = os.path.join(outputs_dir, filename)
+            
+            print(f"Destination path: {media_path}")
+            
+            # Copy the file to media directory
+            shutil.copy2(response_path, media_path)
+            
+            # Verify the file was copied successfully
+            if os.path.exists(media_path):
+                file_size = os.path.getsize(media_path)
+                print(f"File copied successfully to: {media_path} (size: {file_size} bytes)")
+                
+                # Return the media URL
+                response_url = f"{settings.MEDIA_URL}outputs/{filename}"
+                print(f"Generated response URL: {response_url}")
+                return response_url
+            else:
+                print(f"ERROR: File copy failed - destination file not found: {media_path}")
+                return None
+            
+        except Exception as e:
+            print(f"Error saving response to media: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
+    def _get_fallback_response(self):
+        """Get fallback response when Sarvam AI processing fails"""
+        print("=== USING FALLBACK RESPONSE ===")
+        
+        # Check if sample response file exists
         outputs_dir = os.path.join(settings.MEDIA_ROOT, 'outputs')
         sample_response = os.path.join(outputs_dir, 'sample_response.wav')
         
         if os.path.exists(sample_response):
-            # Return the media URL for the sample file
             response_url = f"{settings.MEDIA_URL}outputs/sample_response.wav"
-            print(f"AI response ready: {response_url}")
+            print(f"Using existing fallback response: {response_url}")
             return response_url
         
         # If no sample file in media, check the main outputs directory
@@ -693,17 +860,16 @@ class TwilioVoiceService:
         main_sample_response = os.path.join(main_outputs_dir, 'sample_response.wav')
         
         if os.path.exists(main_sample_response):
-            # Copy to media directory and return URL
             try:
                 os.makedirs(outputs_dir, exist_ok=True)
                 shutil.copy2(main_sample_response, sample_response)
                 response_url = f"{settings.MEDIA_URL}outputs/sample_response.wav"
-                print(f"AI response ready (copied): {response_url}")
+                print(f"Using fallback response (copied from {main_sample_response}): {response_url}")
                 return response_url
             except Exception as e:
-                print(f"Error copying sample file: {e}")
+                print(f"Error copying fallback file: {e}")
         
-        print(f"No AI response file found for call {call_id}")
+        print(f"ERROR: No fallback response available")
         return None
     
     def continue_conversation(self, request, call_id):
@@ -920,165 +1086,6 @@ async def process_audio_async(audio_data, call_id):
     result = await loop.run_in_executor(None, process_in_thread)
     return result
 
-
-def generate_ai_response_audio(text_response, voice='Polly.Joanna'):
-    """
-    Generate audio from text response using Twilio's text-to-speech
-    Returns a URL that can be played to the caller
-    """
-    try:
-        # You can use AWS Polly, Google Text-to-Speech, or other services
-        # For now, we'll return the text that Twilio can speak
-        return {
-            'type': 'text',
-            'content': text_response,
-            'voice': voice
-        }
-    except Exception as e:
-        print(f"Error generating audio response: {e}")
-        return None
-
-
-# Additional utility functions for enhanced audio processing
-
-class AudioProcessor:
-    """Class to handle audio processing and AI integration"""
-    
-    def __init__(self):
-        self.ai_agent_service = AIAgentService()
-    
-    async def process_caller_audio(self, audio_data, call_id):
-        """
-        Process caller's audio and generate AI response
-        This is the main function for audio processing
-        """
-        try:
-            # Step 1: Convert audio to appropriate format if needed
-            processed_audio = self.prepare_audio_for_ai(audio_data)
-            
-            # Step 2: Send to AI for analysis
-            ai_analysis = await self.send_to_ai_analysis(processed_audio, call_id)
-            
-            # Step 3: Generate response audio
-            response_audio = await self.generate_response_audio(ai_analysis)
-            
-            # Step 4: Update call record with analysis
-            await self.update_call_memory(call_id, ai_analysis)
-            
-            return {
-                'analysis': ai_analysis,
-                'response_audio_url': response_audio.get('url') if response_audio else None,
-                'response_text': ai_analysis.get('response_text', ''),
-                'risk_level': ai_analysis.get('risk_level', 'unknown')
-            }
-            
-        except Exception as e:
-            print(f"Error processing caller audio: {e}")
-            return None
-    
-    def prepare_audio_for_ai(self, audio_data):
-        """Prepare audio data for AI processing"""
-        # Add any audio preprocessing here (format conversion, noise reduction, etc.)
-        return audio_data
-    
-    async def send_to_ai_analysis(self, audio_data, call_id):
-        """Send audio to AI service for analysis"""
-        # This would integrate with your actual AI service
-        # For now, return a mock response
-        return {
-            'transcription': 'Sample transcription of caller speech',
-            'emotional_state': 'distressed',
-            'risk_level': 'moderate',
-            'key_topics': ['depression', 'anxiety', 'support'],
-            'response_text': 'I understand you\'re going through a difficult time. Can you tell me more about what\'s happening?',
-            'intervention_techniques': ['active_listening', 'empathy', 'open_ended_questions']
-        }
-    
-    async def generate_response_audio(self, ai_analysis):
-        """Generate audio response from AI analysis"""
-        response_text = ai_analysis.get('response_text', '')
-        
-        if response_text:
-            # For now, return text that Twilio can convert to speech
-            # In production, you might use AWS Polly, Google TTS, etc.
-            return {
-                'type': 'text_to_speech',
-                'text': response_text,
-                'voice': 'Polly.Joanna'
-            }
-        
-        return None
-    
-    async def update_call_memory(self, call_id, ai_analysis):
-        """Update call memory with AI analysis"""
-        try:
-            call = Call.objects.get(id=call_id)
-            
-            # Create or update memory record
-            memory, created = Memory.objects.get_or_create(
-                call=call,
-                defaults={
-                    'risk_level': ai_analysis.get('risk_level', 'unknown'),
-                    'primary_emotion': ai_analysis.get('emotional_state'),
-                    'conversation_summary': ai_analysis.get('transcription', ''),
-                    'key_topics': ai_analysis.get('key_topics', []),
-                    'intervention_techniques_used': ai_analysis.get('intervention_techniques', []),
-                    'confidence_score': ai_analysis.get('confidence', 0.0),
-                    'follow_up_needed': ai_analysis.get('risk_level') in ['high', 'critical']
-                }
-            )
-            
-            if not created:
-                # Update existing memory
-                memory.conversation_summary += f"\n\nUpdate: {ai_analysis.get('transcription', '')}"
-                memory.save()
-            
-            return memory
-            
-        except Call.DoesNotExist:
-            print(f"Call {call_id} not found")
-            return None
-
-
-# Global audio processor instance
-audio_processor = AudioProcessor()
-
-
-def play_audio_response_to_caller(call_sid, response_data):
-    """
-    Play AI-generated audio response to caller
-    This function takes the output from audio processing and plays it to the user
-    """
-    try:
-        service = TwilioVoiceService()
-        
-        if response_data and response_data.get('type') == 'text_to_speech':
-            # Use Twilio's Say verb for text-to-speech
-            twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
-            <Response>
-                <Say voice="{response_data.get('voice', 'Polly.Joanna')}">
-                    {response_data.get('text', '')}
-                </Say>
-                <Pause length="1"/>
-            </Response>'''
-            
-            # Update the call with new TwiML
-            client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
-            call = client.calls(call_sid).update(twiml=twiml)
-            
-            return True
-            
-        elif response_data and response_data.get('url'):
-            # Play audio file URL
-            return service.play_audio_to_caller(call_sid, response_data['url'])
-            
-        return False
-        
-    except Exception as e:
-        print(f"Error playing audio response: {e}")
-        return False
-
-
 # API endpoint for manual audio processing (useful for testing)
 @csrf_exempt
 @require_http_methods(["POST"])
@@ -1099,24 +1106,23 @@ def process_audio_endpoint(request):
         audio_data = get_recording_for_processing(audio_url, prefer_local=False)
         
         if audio_data:
-            # Process audio asynchronously
-            import asyncio
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
-            result = loop.run_until_complete(
-                audio_processor.process_caller_audio(audio_data, call_id)
-            )
-            
-            if result:
-                return JsonResponse({
-                    'success': True,
-                    'analysis': result['analysis'],
-                    'response_text': result['response_text'],
-                    'risk_level': result['risk_level']
-                })
-            else:
-                return JsonResponse({'error': 'Failed to process audio'}, status=500)
+            # Process audio with Sarvam AI
+            try:
+                service = TwilioVoiceService()
+                # The audio processing is now handled in wait_for_ai_response method
+                # which uses Sarvam AI functions
+                response_url = service.wait_for_ai_response(call_id, audio_url)
+                
+                if response_url:
+                    return JsonResponse({
+                        'success': True,
+                        'response_audio_url': response_url,
+                        'message': 'Audio processed successfully with Sarvam AI'
+                    })
+                else:
+                    return JsonResponse({'error': 'Failed to process audio with Sarvam AI'}, status=500)
+            except Exception as e:
+                return JsonResponse({'error': f'Processing error: {str(e)}'}, status=500)
         else:
             return JsonResponse({'error': 'Failed to download audio'}, status=400)
             

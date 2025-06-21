@@ -2,6 +2,7 @@
 Example service for integrating with LLM agent and processing audio
 This file shows how you would integrate your AI agent with the Django backend
 """
+import os
 import requests
 import json
 import asyncio
@@ -459,6 +460,15 @@ class TwilioVoiceService:
         recording_url = request.POST.get('RecordingUrl', '')
         recording_sid = request.POST.get('RecordingSid', '')
         call_sid = request.POST.get('CallSid', '')
+        recording_duration = request.POST.get('RecordingDuration', '0')
+        recording_status = request.POST.get('RecordingStatus', '')
+        
+        print(f"=== Recording Complete Webhook ===")
+        print(f"Call ID: {call_id}")
+        print(f"Recording URL: {recording_url}")
+        print(f"Recording Duration: {recording_duration} seconds")
+        print(f"Recording Status: {recording_status}")
+        print(f"Call SID: {call_sid}")
         
         response = VoiceResponse()
         
@@ -505,7 +515,9 @@ class TwilioVoiceService:
                 })
             
             # Wait for Sarvam AI response - pass recording URL for processing
+            print(f"=== Calling wait_for_ai_response for call {call_id} ===")
             response_audio_url = self.wait_for_ai_response(call_id, recording_url)
+            print(f"=== wait_for_ai_response returned: {response_audio_url} ===")
             
             if response_audio_url:
                 # Update recording chunk with response info
@@ -534,7 +546,8 @@ class TwilioVoiceService:
                     recording_status_callback_method='POST'
                 )
             else:
-                # If no response available, continue recording anyway
+                # If no response available (could be AI decided not to respond to silence), continue recording anyway
+                print(f"No AI response available, continuing to listen...")
                 response.record(
                     action=f'/twilio/recording/{call.id}/',
                     method='POST',
@@ -552,7 +565,7 @@ class TwilioVoiceService:
                 method='POST',
                 max_length=30,
                 play_beep=False,
-                trim='trim-silence'
+                trim='trim-silence',
             )
         except Exception as e:
             print(f"Error in handle_recording_complete: {e}")
@@ -562,7 +575,7 @@ class TwilioVoiceService:
                 method='POST',
                 max_length=30,
                 play_beep=False,
-                trim='trim-silence'
+                trim='trim-silence',
             )
         
         return HttpResponse(str(response), content_type='text/xml')
@@ -577,7 +590,9 @@ class TwilioVoiceService:
         try:
             # If we have a recording URL, download it first
             if recording_url:
+                print(f"=== Attempting to download audio from Twilio ===")
                 local_audio_path = self._download_audio_for_processing(recording_url, call_id)
+                print(f"=== Download result: {local_audio_path} ===")
                 if not local_audio_path:
                     print(f"FALLBACK TRIGGERED: Failed to download audio for call {call_id}")
                     return self._get_fallback_response()
@@ -586,13 +601,16 @@ class TwilioVoiceService:
                 return self._get_fallback_response()
             
             # Process with Sarvam AI
+            print(f"=== Starting Sarvam AI processing ===")
             print(f"Processing audio with Sarvam AI...")
             response_audio_path = self._process_with_sarvam_ai(local_audio_path, call_id)
+            print(f"=== Sarvam AI processing returned: {response_audio_path} ===")
             
             if response_audio_path and os.path.exists(response_audio_path):
                 print(f"Sarvam AI processing completed successfully")
                 # Move response to media/outputs directory and return URL
                 response_url = self._save_response_to_media(response_audio_path, call_id)
+                print(f"=== Media save returned: {response_url} ===")
                 if response_url:
                     print(f"=== AI processing SUCCESS for call {call_id} ===")
                     print(f"Response URL: {response_url}")
@@ -601,13 +619,13 @@ class TwilioVoiceService:
                     print(f"FALLBACK TRIGGERED: Failed to save response to media for call {call_id}")
                     return self._get_fallback_response()
             else:
-                print(f"FALLBACK TRIGGERED: Sarvam AI processing failed for call {call_id}")
+                print(f"Sarvam AI processing failed for call {call_id}")
                 print(f"Response path: {response_audio_path}")
                 print(f"Path exists: {os.path.exists(response_audio_path) if response_audio_path else 'N/A'}")
                 return self._get_fallback_response()
                 
         except Exception as e:
-            print(f"FALLBACK TRIGGERED: Error processing audio with Sarvam AI: {e}")
+            print(f"Error processing audio with Sarvam AI: {e}")
             import traceback
             traceback.print_exc()
             return self._get_fallback_response()
@@ -698,7 +716,7 @@ class TwilioVoiceService:
                 file_created = self._wait_for_file_creation(response_path, timeout=30)
                 if not file_created:
                     print(f"ERROR: Sarvam AI reported success but output file not created within timeout: {response_path}")
-                    return None
+                    return None  # Continue listening instead of fallback
                 
                 file_size = os.path.getsize(response_path)
                 print(f"Output file created successfully: {response_path} (size: {file_size} bytes)")
@@ -718,6 +736,7 @@ class TwilioVoiceService:
                 return response_path
             else:
                 print(f"Sarvam AI processing failed for call {call_id}: {result.get('error', 'Unknown error')}")
+                # Return None to trigger fallback response
                 return None
                 
         except Exception as e:
@@ -845,6 +864,7 @@ class TwilioVoiceService:
     def _get_fallback_response(self):
         """Get fallback response when Sarvam AI processing fails"""
         print("=== USING FALLBACK RESPONSE ===")
+        print("=== THIS SHOULD ONLY HAPPEN WHEN SARVAM AI FAILS ===")
         
         # Check if sample response file exists
         outputs_dir = os.path.join(settings.MEDIA_ROOT, 'outputs')

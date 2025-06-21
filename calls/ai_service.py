@@ -447,6 +447,7 @@ class TwilioVoiceService:
             action=f'/twilio/recording/{call.id}/',
             method='POST',
             max_length=30,  # 30 seconds max per recording
+            timeout=3,  # Finish recording after 3 seconds of silence
             play_beep=False,
             trim='trim-silence',
             recording_status_callback=f'/twilio/recording-status/{call.id}/',
@@ -540,6 +541,7 @@ class TwilioVoiceService:
                     action=f'/twilio/recording/{call.id}/',
                     method='POST',
                     max_length=30,
+                    timeout=3,  # Finish recording after 3 seconds of silence
                     play_beep=False,
                     trim='trim-silence',
                     recording_status_callback=f'/twilio/recording-status/{call.id}/',
@@ -552,6 +554,7 @@ class TwilioVoiceService:
                     action=f'/twilio/recording/{call.id}/',
                     method='POST',
                     max_length=30,
+                    timeout=3,  # Finish recording after 3 seconds of silence
                     play_beep=False,
                     trim='trim-silence',
                     recording_status_callback=f'/twilio/recording-status/{call.id}/',
@@ -564,6 +567,7 @@ class TwilioVoiceService:
                 action=f'/twilio/recording/{call_id}/',
                 method='POST',
                 max_length=30,
+                timeout=3,  # Finish recording after 3 seconds of silence
                 play_beep=False,
                 trim='trim-silence',
             )
@@ -574,6 +578,7 @@ class TwilioVoiceService:
                 action=f'/twilio/recording/{call_id}/',
                 method='POST',
                 max_length=30,
+                timeout=3,  # Finish recording after 3 seconds of silence
                 play_beep=False,
                 trim='trim-silence',
             )
@@ -636,42 +641,59 @@ class TwilioVoiceService:
             print(f"Downloading audio from Twilio for call {call_id}")
             print(f"Recording URL: {recording_url}")
             
-            # Download audio from Twilio
-            audio_response = requests.get(recording_url, auth=(
-                settings.TWILIO_ACCOUNT_SID,
-                settings.TWILIO_AUTH_TOKEN
-            ))
+            # Wait a moment for Twilio to make the recording available
+            max_retries = 3
+            retry_delay = 1  # seconds
             
-            print(f"Twilio response status: {audio_response.status_code}")
-            
-            if audio_response.status_code == 200:
-                # Create temporary file for processing
-                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                filename = f"input_{timestamp}_{str(call_id)[:8]}.wav"
+            for attempt in range(max_retries):
+                print(f"Download attempt {attempt + 1}/{max_retries}")
                 
-                # Save to a processing directory
-                processing_dir = os.path.join(settings.MEDIA_ROOT, 'processing')
-                os.makedirs(processing_dir, exist_ok=True)
+                # Download audio from Twilio
+                audio_response = requests.get(recording_url, auth=(
+                    settings.TWILIO_ACCOUNT_SID,
+                    settings.TWILIO_AUTH_TOKEN
+                ))
                 
-                input_file_path = os.path.join(processing_dir, filename)
+                print(f"Twilio response status: {audio_response.status_code}")
                 
-                with open(input_file_path, 'wb') as f:
-                    f.write(audio_response.content)
-                
-                file_size = len(audio_response.content)
-                print(f"Downloaded audio for processing: {input_file_path} (size: {file_size} bytes)")
-                
-                # Verify file was created
-                if os.path.exists(input_file_path):
-                    actual_size = os.path.getsize(input_file_path)
-                    print(f"File verification: {input_file_path} exists (size: {actual_size} bytes)")
-                    return input_file_path
+                if audio_response.status_code == 200:
+                    # Create temporary file for processing
+                    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                    filename = f"input_{timestamp}_{str(call_id)[:8]}.wav"
+                    
+                    # Save to a processing directory
+                    processing_dir = os.path.join(settings.MEDIA_ROOT, 'processing')
+                    os.makedirs(processing_dir, exist_ok=True)
+                    
+                    input_file_path = os.path.join(processing_dir, filename)
+                    
+                    with open(input_file_path, 'wb') as f:
+                        f.write(audio_response.content)
+                    
+                    file_size = len(audio_response.content)
+                    print(f"Downloaded audio for processing: {input_file_path} (size: {file_size} bytes)")
+                    
+                    # Verify file was created and has content
+                    if os.path.exists(input_file_path) and os.path.getsize(input_file_path) > 0:
+                        actual_size = os.path.getsize(input_file_path)
+                        print(f"File verification: {input_file_path} exists (size: {actual_size} bytes)")
+                        return input_file_path
+                    else:
+                        print(f"ERROR: Downloaded file not found or empty: {input_file_path}")
+                        if os.path.exists(input_file_path):
+                            os.remove(input_file_path)  # Clean up empty file
+                elif audio_response.status_code == 404 and attempt < max_retries - 1:
+                    print(f"Recording not yet available (404), waiting {retry_delay}s before retry...")
+                    time.sleep(retry_delay)
+                    continue
                 else:
-                    print(f"ERROR: Downloaded file not found: {input_file_path}")
-                    return None
-            else:
-                print(f"Failed to download audio: HTTP {audio_response.status_code}")
-                return None
+                    print(f"Failed to download audio: HTTP {audio_response.status_code}")
+                    if attempt < max_retries - 1:
+                        print(f"Retrying in {retry_delay}s...")
+                        time.sleep(retry_delay)
+                    
+            print(f"Failed to download audio after {max_retries} attempts")
+            return None
                 
         except Exception as e:
             print(f"Error downloading audio for processing: {e}")
@@ -901,6 +923,7 @@ class TwilioVoiceService:
             action=f'/twilio/recording/{call_id}/',
             method='POST',
             max_length=30,
+            timeout=3,  # Finish recording after 3 seconds of silence
             play_beep=False,
             trim='trim-silence',
             recording_status_callback=f'/twilio/recording-status/{call_id}/',
@@ -918,6 +941,7 @@ class TwilioVoiceService:
             action=f'/twilio/recording/{call_id}/',
             method='POST',
             max_length=30,
+            timeout=3,  # Finish recording after 3 seconds of silence
             play_beep=False,
             trim='trim-silence',
             recording_status_callback=f'/twilio/recording-status/{call_id}/',

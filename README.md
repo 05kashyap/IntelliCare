@@ -7,8 +7,7 @@
 Refer to the system diagram for a full overview of the data flow and system architecture.
 
 ---
-![image1](methodology.jpg)
-
+![image](https://github.com/user-attachments/assets/878b894e-eee4-445b-9fa1-64c039bd9c17)
 ## 🌐 Key Features
 
 * **Voice-first interface** with real-time phone integration

@@ -202,6 +202,14 @@ Access the admin dashboard at `http://127.0.0.1:8000/admin/`
 - Emergency contacts for high-risk cases
 - Contact tracking and notes
 
+### RecordingChunk Model
+- Stores individual audio chunks within a call:
+  - Twilio and local recording URLs for each chunk
+  - Order and duration of the chunk in the call
+  - AI processing status, including whether the chunk has been processed, the AI-generated response audio URL, and whether the response was played to the caller
+  - Timestamps for when the chunk was recorded and processed
+- Enables granular analysis, guardrailing, and response generation on a per-segment basis
+
 ---
 
 ## Twilio & AI Integration

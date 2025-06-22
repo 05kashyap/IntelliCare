@@ -20,7 +20,7 @@
                 
                 // Test calls endpoint
                 console.log('Testing calls endpoint...');
-                const callsResponse = await fetch('/api/dashboard/calls/?limit=2');
+                const callsResponse = await fetch('/api/dashboard/?limit=2');
                 const calls = await callsResponse.json();
                 console.log('Calls:', calls);
                 

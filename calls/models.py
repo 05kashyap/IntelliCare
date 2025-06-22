@@ -21,7 +21,10 @@ class Call(models.Model):
     end_time = models.DateTimeField(null=True, blank=True)
     duration = models.DurationField(null=True, blank=True, help_text="Call duration")
     audio_file_url = models.URLField(null=True, blank=True, help_text="URL to recorded audio")
+    local_recording_path = models.CharField(max_length=500, null=True, blank=True, help_text="Local path to stored recording")
+    local_recording_url = models.CharField(max_length=500, null=True, blank=True, help_text="Local URL to access recording")
     transcription = models.TextField(null=True, blank=True, help_text="Call transcription")
+    conversation_state = models.JSONField(null=True, blank=True, help_text="Conversation history for AI processing")
     
     # Location information (if available)
     caller_city = models.CharField(max_length=100, null=True, blank=True)
@@ -177,3 +180,36 @@ class EmergencyContact(models.Model):
     
     def __str__(self):
         return f"{self.contact_type} for {self.call.phone_number}"
+
+
+class RecordingChunk(models.Model):
+    """Model to store individual recording chunks within a call"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    call = models.ForeignKey(Call, on_delete=models.CASCADE, related_name='recording_chunks')
+    
+    # Recording information
+    recording_url = models.URLField(help_text="Twilio recording URL")
+    local_recording_path = models.CharField(max_length=500, null=True, blank=True, help_text="Local path to stored recording")
+    local_recording_url = models.CharField(max_length=500, null=True, blank=True, help_text="Local URL to access recording")
+    
+    # Chunk metadata
+    chunk_number = models.IntegerField(help_text="Order of this chunk in the call")
+    duration_seconds = models.FloatField(null=True, blank=True, help_text="Duration of this chunk in seconds")
+    
+    # AI processing
+    processed = models.BooleanField(default=False, help_text="Whether this chunk has been processed by AI")
+    response_audio_url = models.URLField(null=True, blank=True, help_text="URL to AI response audio")
+    response_played = models.BooleanField(default=False, help_text="Whether AI response was played to caller")
+    
+    # Timestamps
+    recorded_at = models.DateTimeField(auto_now_add=True)
+    processed_at = models.DateTimeField(null=True, blank=True)
+    
+    class Meta:
+        ordering = ['chunk_number']
+        unique_together = ['call', 'chunk_number']
+        verbose_name = "Recording Chunk"
+        verbose_name_plural = "Recording Chunks"
+    
+    def __str__(self):
+        return f"Chunk {self.chunk_number} for call {self.call.phone_number}"

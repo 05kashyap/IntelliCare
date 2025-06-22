@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Call, Memory, CallNote, EmergencyContact
+from .models import Call, Memory, CallNote, EmergencyContact, RecordingChunk, RecordingChunk
 
 
 class MemorySerializer(serializers.ModelSerializer):
@@ -47,17 +47,33 @@ class EmergencyContactSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at']
 
 
+class RecordingChunkSerializer(serializers.ModelSerializer):
+    """Serializer for RecordingChunk model"""
+    
+    class Meta:
+        model = RecordingChunk
+        fields = [
+            'id', 'call', 'recording_url', 'local_recording_path', 
+            'local_recording_url', 'chunk_number', 'duration_seconds',
+            'processed', 'response_audio_url', 'response_played',
+            'recorded_at', 'processed_at'
+        ]
+        read_only_fields = ['id', 'recorded_at', 'processed_at']
+
+
 class CallSerializer(serializers.ModelSerializer):
     """Serializer for Call model"""
     memories = MemorySerializer(many=True, read_only=True)
     notes = CallNoteSerializer(many=True, read_only=True)
     emergency_contacts = EmergencyContactSerializer(many=True, read_only=True)
+    recording_chunks = RecordingChunkSerializer(many=True, read_only=True)
     status_display = serializers.CharField(source='get_status_display', read_only=True)
     call_duration_formatted = serializers.CharField(read_only=True)
     
     # Risk level from the latest memory
     latest_risk_level = serializers.SerializerMethodField()
     latest_emotion = serializers.SerializerMethodField()
+    total_chunks = serializers.SerializerMethodField()
     
     class Meta:
         model = Call
@@ -66,11 +82,11 @@ class CallSerializer(serializers.ModelSerializer):
             'start_time', 'end_time', 'duration', 'call_duration_formatted',
             'audio_file_url', 'transcription', 'caller_city', 'caller_state',
             'caller_country', 'created_at', 'updated_at', 'memories', 'notes',
-            'emergency_contacts', 'latest_risk_level', 'latest_emotion'
+            'emergency_contacts', 'recording_chunks', 'latest_risk_level', 'latest_emotion', 'total_chunks'
         ]
         read_only_fields = [
             'id', 'created_at', 'updated_at', 'call_duration_formatted',
-            'latest_risk_level', 'latest_emotion'
+            'latest_risk_level', 'latest_emotion', 'total_chunks'
         ]
     
     def get_latest_risk_level(self, obj):
@@ -94,6 +110,10 @@ class CallSerializer(serializers.ModelSerializer):
                 'intensity': latest_memory.emotion_intensity
             }
         return None
+    
+    def get_total_chunks(self, obj):
+        """Get total number of recording chunks"""
+        return obj.recording_chunks.count()
 
 
 class CallSummarySerializer(serializers.ModelSerializer):

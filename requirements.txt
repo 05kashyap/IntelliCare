@@ -16,6 +16,7 @@ propcache==0.3.2
 psycopg2-binary==2.9.10
 PyJWT==2.10.1
 python-decouple==3.8
+python-dotenv==1.0.0
 requests==2.32.4
 sqlparse==0.5.3
 twilio==9.6.3

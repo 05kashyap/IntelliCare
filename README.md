@@ -2,20 +2,21 @@
 
 A comprehensive Django-based backend system for managing a suicide prevention hotline with advanced AI agent integration, real-time call management, and intelligent memory storage for sophisticated risk assessment and emotional analysis.
 
+## System Architecture
+
+![image1](methodology.jpg)
+
 ## 🌟 Key Features
 
 ### 🎯 Core Functionality
 - **Advanced Call Management**: Complete Twilio integration with real-time call handling and status tracking
 - **AI-Powered Memory System**: Sophisticated AI agent memory storage with risk assessment and emotional analysis
 - **Comprehensive Admin Dashboard**: Full-featured admin interface with statistics, risk visualization, and call management
-- **Risk Assessment Engine**: Multi-level risk tracking (low, moderate, high, critical) with color-coded indicators
-- **Emergency Contact Management**: Automated emergency contact handling for high-risk cases
-- **Human Operator Notes**: Collaborative note-taking system for human supervisors
 - **RESTful API**: Complete API ecosystem for frontend integration
 - **Real-time Analytics**: Live dashboard with statistics, trends, and historical data
 
 ### 🔧 Advanced Features
-- **Continuous Recording System**: Intelligent 30-second chunk recording with automatic AI processing
+- **Continuous Recording System**: Intelligent 30-second dynamic chunk recording with automatic AI processing
 - **Multi-Language Support**: Built-in support for multilingual conversations
 - **Audio Processing Pipeline**: Automated audio download, processing, and response generation
 - **Local Storage Management**: Sophisticated local recording storage with integrity verification
@@ -148,31 +149,6 @@ class RecordingChunk(models.Model):
     processed_at = DateTimeField()             # Processing timestamp
 ```
 
-### 📝 CallNote Model
-**Human operator notes and annotations**
-```python
-class CallNote(models.Model):
-    id = UUIDField(primary_key=True)
-    call = ForeignKey(Call)                    # Associated call
-    author = ForeignKey(User)                  # Note author
-    note = TextField()                         # Note content
-    is_urgent = BooleanField()                 # Urgency flag
-    created_at = DateTimeField()               # Creation timestamp
-    updated_at = DateTimeField()               # Last update
-```
-
-### 🚨 EmergencyContact Model
-**Emergency contacts for high-risk cases**
-```python
-class EmergencyContact(models.Model):
-    id = UUIDField(primary_key=True)
-    call = ForeignKey(Call)                    # Associated call
-    contact_type = CharField()                 # Contact type
-    contact_info = CharField()                 # Contact information
-    notes = TextField()                        # Additional notes
-    contacted = BooleanField()                 # Contact status
-    contact_time = DateTimeField()             # Contact timestamp
-```
 
 ## 🚀 Installation & Setup
 
@@ -234,19 +210,7 @@ python manage.py migrate
 python manage.py createsuperuser
 ```
 
-### 4. Sample Data Generation
-```bash
-# Generate sample data for testing
-python manage.py create_sample_data --calls 20
-
-# This creates:
-# - Admin user (username: admin, password: admin123)
-# - 20 sample calls with associated memories
-# - Various risk levels and emotional states
-# - Sample notes and emergency contacts
-```
-
-### 5. Start Development Server
+### 4. Start Development Server
 ```bash
 python manage.py runserver
 ```
@@ -323,9 +287,7 @@ GET    /api/memories/risk_summary/    # Risk level summary
 #### Dashboard Analytics
 ```http
 GET    /api/dashboard/stats/          # Dashboard statistics
-GET    /api/dashboard/historical/     # Historical data
 GET    /api/dashboard/calls/          # Public call data
-GET    /api/dashboard/memories/       # Public memory data
 ```
 
 #### Twilio Webhooks
@@ -446,6 +408,7 @@ def handle_recording_complete(request, call_id):
 
 #### 3. Continuous Recording Cycle
 - **30-second chunks**: Each recording limited to 30 seconds
+- **Dynamic record stopping**: After 3 seconds of silence, end the recording and send to server
 - **Immediate processing**: AI processes each chunk in real-time
 - **Seamless playback**: AI responses played back immediately
 - **Automatic continuation**: Recording resumes after each response
@@ -664,25 +627,6 @@ def dashboard_stats():
     }
 ```
 
-### 📊 Historical Data Analysis
-- **Daily call volume trends**
-- **Risk level distribution over time**
-- **Response time analytics**
-- **Geographic call distribution**
-- **AI processing performance metrics**
-
-## 🧪 Testing
-
-### 🔬 Test Data Generation
-```bash
-# Generate comprehensive test data
-python manage.py create_sample_data --calls 50
-
-# Custom test scenarios
-python manage.py create_sample_data --calls 10 --risk_level high
-python manage.py create_sample_data --calls 20 --with_notes --with_contacts
-```
-
 ### 🎯 API Testing Examples
 ```bash
 # Test call creation
@@ -723,115 +667,115 @@ def test_continuous_recording():
         assert result['success'] == True
 ```
 
-## 🚀 Deployment
+## 🚀 Development with Ngrok
 
-### 🐳 Docker Deployment
-```dockerfile
-FROM python:3.9-slim
+### 🌐 Ngrok Setup for Webhook Testing
 
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install -r requirements.txt
+Ngrok allows you to expose your local Django development server to the internet, making it perfect for testing webhooks from services like Twilio without deploying to production.
 
-COPY . .
-EXPOSE 8000
+#### Prerequisites
+- Python 3.9+ installed
+- Django project set up locally
+- Ngrok account (free tier available)
 
-CMD ["gunicorn", "hotline_backend.wsgi:application", "--bind", "0.0.0.0:8000"]
-```
+#### Installation
 
-### ☁️ Cloud Deployment Options
+1. **Install Ngrok**
+   ```bash
+   # Download from https://ngrok.com/download
+   # Or use package managers:
+   
+   # macOS (Homebrew)
+   brew install ngrok/ngrok/ngrok
+   
+   # Windows (Chocolatey)
+   choco install ngrok
+   
+   # Linux (Snap)
+   sudo snap install ngrok
+   ```
 
-#### AWS Deployment
-- **EC2**: Standard virtual machine deployment
-- **ECS**: Containerized deployment with auto-scaling
-- **Lambda**: Serverless webhook handlers
-- **RDS**: Managed PostgreSQL database
-- **S3**: Audio file storage
+2. **Authenticate Ngrok**
+   ```bash
+   ngrok config add-authtoken YOUR_AUTHTOKEN
+   ```
+   *Get your authtoken from [ngrok dashboard](https://dashboard.ngrok.com/get-started/your-authtoken)*
 
-#### Heroku Deployment
-```bash
-# Heroku deployment
-heroku create suicide-hotline-backend
-heroku addons:create heroku-postgresql:standard-0
-heroku config:set SECRET_KEY=your-secret-key
-heroku config:set TWILIO_ACCOUNT_SID=your-sid
-git push heroku main
-```
+#### 🏃‍♂️ Running the Application
 
-### 🔧 Production Configuration
+1. **Start Django Development Server**
+   ```bash
+   # In your project directory
+   python manage.py runserver 8000
+   ```
+
+2. **Expose Local Server with Ngrok**
+   ```bash
+   # In a new terminal window
+   ngrok http 8000
+   ```
+
+3. **Note the Public URL**
+   ```
+   ngrok by @inconshreveable
+   
+   Session Status                online
+   Account                       your-email@example.com
+   Version                       3.1.0
+   Region                        United States (us)
+   Forwarding                    https://abc123.ngrok.io -> http://localhost:8000
+   ```
+
+#### ⚙️ Django Configuration for Ngrok
+
+Update your `settings.py` for ngrok development:
+
 ```python
-# Production settings.py additions
-import dj_database_url
+# settings.py
+import os
 
-# Database from environment
-DATABASES['default'] = dj_database_url.parse(os.environ.get('DATABASE_URL'))
+# Allow ngrok host
+ALLOWED_HOSTS = [
+    'localhost',
+    '127.0.0.1',
+    '*.ngrok.io',  # Allow all ngrok subdomains
+    '.ngrok-free.app',  # For free ngrok domains
+]
 
-# Static files
-STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
-STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+# Webhook URLs for external services
+NGROK_URL = os.environ.get('NGROK_URL', 'https://your-ngrok-url.ngrok.io')
 
-# Media files
-DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
-AWS_STORAGE_BUCKET_NAME = 'your-bucket-name'
+# Twilio webhook configuration
+TWILIO_WEBHOOK_URL = f"{NGROK_URL}/api/webhooks/twilio/"
 
-# Logging
-LOGGING = {
-    'version': 1,
-    'disable_existing_loggers': False,
-    'handlers': {
-        'file': {
-            'level': 'INFO',
-            'class': 'logging.FileHandler',
-            'filename': 'django.log',
-        },
-    },
-    'loggers': {
-        'django': {
-            'handlers': ['file'],
-            'level': 'INFO',
-            'propagate': True,
-        },
-    },
-}
+# CSRF settings for webhooks
+CSRF_TRUSTED_ORIGINS = [
+    'https://*.ngrok.io',
+    'https://*.ngrok-free.app',
+]
 ```
 
-## 🔄 Continuous Integration
+#### 🔗 Webhook Configuration
 
-### 🛠️ GitHub Actions Workflow
-```yaml
-name: Django CI/CD
+**For Twilio Webhooks:**
+```bash
+# Set your ngrok URL as the webhook endpoint
+# Voice webhook: https://your-ngrok-url.ngrok.io/api/webhooks/twilio/voice/
+# SMS webhook: https://your-ngrok-url.ngrok.io/api/webhooks/twilio/sms/
+```
 
-on: [push, pull_request]
+#### 📝 Environment Variables
 
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    
-    services:
-      postgres:
-        image: postgres:13
-        env:
-          POSTGRES_PASSWORD: postgres
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    
-    steps:
-    - uses: actions/checkout@v2
-    - name: Set up Python
-      uses: actions/setup-python@v2
-      with:
-        python-version: 3.9
-    
-    - name: Install dependencies
-      run: |
-        pip install -r requirements.txt
-    
-    - name: Run tests
-      run: |
-        python manage.py test
+Create a `.env` file for local development:
+
+```bash
+# .env
+DEBUG=True
+SECRET_KEY=your-local-secret-key
+DATABASE_URL=sqlite:///db.sqlite3
+TWILIO_ACCOUNT_SID=your_twilio_sid
+TWILIO_AUTH_TOKEN=your_twilio_token
+NGROK_URL=https://your-ngrok-url.ngrok.io
 ```
 
 ## 📋 Maintenance
@@ -859,15 +803,6 @@ python manage.py system_check            # System health check
 - **Audio processing performance**
 - **Storage usage analytics**
 
-## 🤝 Contributing
-
-### 🌟 Development Guidelines
-1. **Code Style**: Follow PEP 8 Python style guide
-2. **Testing**: Write comprehensive tests for new features
-3. **Documentation**: Update documentation for API changes
-4. **Security**: Follow Django security best practices
-5. **Performance**: Consider performance impact of changes
-
 ### 🔄 Development Workflow
 ```bash
 # Set up development environment
@@ -894,10 +829,11 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 
 ## 🆘 Support
 
-### 📞 Emergency Resources
-- **National Suicide Prevention Lifeline**: 988
-- **Crisis Text Line**: Text HOME to 741741
-- **International Association for Suicide Prevention**: https://www.iasp.info/resources/Crisis_Centres/
+### 📞 contact details
+- Adya N A - adyaneechadi@gmail.com
+- Aryan Kashyap - aryankashyapnaveen@gmail.com
+- Deepak C Nayak - deepakachu5114@gmail.com
+- Ragha Sai - raghasaiblore@gmail.com
 
 ### 💬 Technical Support
 - **Documentation**: Comprehensive API and integration docs

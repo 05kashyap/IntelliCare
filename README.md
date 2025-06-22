@@ -2,16 +2,41 @@
 
 A Django-based backend system for managing a suicide prevention hotline with AI agent integration, call management, and memory storage for risk assessment and emotional analysis.
 
+---
+
+## System Architecture
+
+![image1](image1)
+
+The system integrates the following major components:
+- **Twilio API** for telephony, call recording, and playback.
+- **SARVAM API** for language detection, audio transcription, and text-to-speech (TTS).
+- **mem0** for memory retrieval, storage, and update.
+- **SARVAM-M** for conversational AI, risk and emotion assessment, and safety guard rails.
+- Real-time danger assessment and escalation to alert authorities if needed.
+
+The call flow:
+1. Caller audio is recorded via Twilio and passed to SARVAM API for transcription and language detection.
+2. Guard rails are checked for safety and compliance.
+3. SARVAM-M (AI agent) processes conversation, retrieves and updates memory, assesses risk, and generates a response.
+4. If risk exceeds a threshold, authorities can be automatically alerted.
+5. AI-generated response is converted to audio by the SARVAM API and played back to the caller.
+
+---
+
 ## Features
 
-- **Call Management**: Track incoming calls with Twilio integration
-- **Memory System**: Store AI agent memories including risk levels, emotions, and conversation data
-- **Admin Dashboard**: Comprehensive admin interface for managing calls and memories
-- **Risk Assessment**: Track risk levels (low, moderate, high, critical) with color-coded display
-- **Emergency Contacts**: Manage emergency contacts for high-risk cases
-- **Call Notes**: Add notes to calls by human operators/supervisors
-- **API Endpoints**: RESTful API for integration with frontend applications
-- **Dashboard Statistics**: Get real-time statistics and analytics
+- **Call Management**: Track incoming calls with Twilio integration.
+- **Memory System**: Store AI agent memories including risk levels, emotions, and conversation data.
+- **Admin Dashboard**: Comprehensive admin interface for managing calls and memories.
+- **Risk Assessment**: Track risk levels (low, moderate, high, critical) with color-coded display.
+- **Emergency Contacts**: Manage emergency contacts for high-risk cases.
+- **Call Notes**: Add notes to calls by human operators/supervisors.
+- **API Endpoints**: RESTful API for integration with frontend applications.
+- **Dashboard Statistics**: Get real-time statistics and analytics.
+- **Guard Rails and Escalation**: Automated guard rails check conversations for safety, with escalation to authorities if danger is above threshold.
+
+---
 
 ## Project Structure
 
@@ -29,9 +54,11 @@ suicide_hotline/
 │   ├── settings.py                 # Main settings
 │   └── urls.py                     # Main URL configuration
 ├── requirements.txt                # Python dependencies
-├── .env                           # Environment variables
-└── manage.py                      # Django management script
+├── .env                            # Environment variables
+└── manage.py                       # Django management script
 ```
+
+---
 
 ## Installation & Setup
 
@@ -89,6 +116,8 @@ This creates:
 python manage.py runserver
 ```
 
+---
+
 ## Admin Dashboard
 
 Access the admin dashboard at `http://127.0.0.1:8000/admin/`
@@ -122,6 +151,8 @@ Access the admin dashboard at `http://127.0.0.1:8000/admin/`
    - Manage emergency contacts for high-risk cases
    - Track contact status and times
 
+---
+
 ## API Endpoints
 
 ### Call Management
@@ -142,6 +173,8 @@ Access the admin dashboard at `http://127.0.0.1:8000/admin/`
 - `POST /twilio/voice/` - Handle incoming calls
 - `POST /twilio/recording/{call_id}/` - Handle recording completion
 - `POST /twilio/status/` - Handle call status updates
+
+---
 
 ## Database Models
 
@@ -169,7 +202,9 @@ Access the admin dashboard at `http://127.0.0.1:8000/admin/`
 - Emergency contacts for high-risk cases
 - Contact tracking and notes
 
-## Twilio Integration
+---
+
+## Twilio & AI Integration
 
 ### Webhook Setup
 
@@ -181,19 +216,20 @@ In your Twilio Console, configure these webhooks:
 
 ### Call Flow
 
-1. Incoming call hits voice webhook
-2. System creates Call record
-3. Plays welcome message
-4. Records conversation
-5. On recording completion, triggers audio processing
-6. AI agent processes audio and creates Memory record
-7. Status updates tracked throughout
+1. Incoming call hits voice webhook and records audio until silence.
+2. SARVAM API detects language and transcribes audio.
+3. Guard rails check for content safety.
+4. SARVAM-M AI analyzes the conversation, retrieves memories, and assesses risk.
+5. If risk/danger is above a threshold, authorities are flagged automatically.
+6. Response is generated, converted to speech, and played back to the caller.
+
+---
 
 ## Integration with AI Agent
 
 The system is designed to integrate with your LLM agent that processes audio and generates memories. Key integration points:
 
-1. **Audio Processing**: When a recording is completed, trigger your audio processing pipeline
+1. **Audio Processing**: When a recording is completed, trigger your audio processing pipeline.
 2. **Memory Creation**: Your AI agent should create Memory records with:
    - Risk assessment
    - Emotional analysis
@@ -226,6 +262,8 @@ memory = Memory.objects.create(
 )
 ```
 
+---
+
 ## Production Deployment
 
 ### Security Checklist
@@ -250,6 +288,8 @@ TWILIO_ACCOUNT_SID=your_production_twilio_sid
 TWILIO_AUTH_TOKEN=your_production_twilio_token
 TWILIO_PHONE_NUMBER=your_production_phone_number
 ```
+
+---
 
 ## Development
 
@@ -282,8 +322,16 @@ curl -H "Accept: application/json" http://127.0.0.1:8000/api/calls/
 curl -H "Accept: application/json" http://127.0.0.1:8000/api/dashboard/stats/
 ```
 
+---
+
 ## Support & Contributing
 
 This system provides a robust foundation for a suicide prevention hotline with AI integration. The admin dashboard gives you comprehensive visibility into calls, risk assessments, and memories stored by your AI agent.
 
 For questions or contributions, please refer to the project documentation or contact the development team.
+
+---
+
+## License
+
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.

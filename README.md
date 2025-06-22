@@ -63,6 +63,7 @@ Refer to the system diagram for a full overview of the data flow and system arch
 ---
 ## Project Structure
 
+```
 ├── calls
 │   ├── __init__.py
 │   ├── ai_service.py   # integrates AI with twilio APIs
@@ -107,7 +108,7 @@ Refer to the system diagram for a full overview of the data flow and system arch
 │   └── test.html
 ├── test_audio_flow.py
 └── test_guard_rails.py
-
+```
 
 ---
 ## ⚙️ Technologies Used

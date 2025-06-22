@@ -184,6 +184,9 @@ ALLOWED_HOSTS=localhost,127.0.0.1,your-domain.com
 
 # CORS Settings (add your frontend domains)
 CORS_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+
+SARVAM_API_KEY=<your api key>
+GEMINI_API_KEY=<your api key>
 ```
 
 

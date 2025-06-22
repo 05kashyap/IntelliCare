@@ -1,4 +1,10 @@
-from mem0 import Memory
+try:
+    from mem0 import Memory
+    MEM0_AVAILABLE = True
+except ImportError:
+    MEM0_AVAILABLE = False
+    print("Warning: mem0 not available - memory features will be disabled")
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -27,5 +33,13 @@ config = {
 }
 
 def init_memory():
-    m = Memory.from_config(config)
-    return m
+    if not MEM0_AVAILABLE:
+        print("Warning: Memory functionality disabled - mem0 not available")
+        return None
+    
+    try:
+        m = Memory.from_config(config)
+        return m
+    except Exception as e:
+        print(f"Warning: Failed to initialize memory system: {e}")
+        return None

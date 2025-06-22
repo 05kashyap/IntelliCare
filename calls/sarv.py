@@ -2,9 +2,29 @@ import os
 import json
 import logging
 from dotenv import load_dotenv
-from sarvamai import SarvamAI
-from sarvamai.play import save
-from .memory_integration import init_memory
+
+# Conditional imports with graceful fallbacks
+try:
+    from sarvamai import SarvamAI
+    from sarvamai.play import save
+    SARVAM_AVAILABLE = True
+except ImportError:
+    SARVAM_AVAILABLE = False
+    print("Warning: sarvamai not available - AI features will be disabled")
+
+try:
+    from .memory_integration import init_memory
+    MEMORY_AVAILABLE = True
+except ImportError:
+    MEMORY_AVAILABLE = False
+    print("Warning: memory_integration not available - memory features will be disabled")
+
+try:
+    from transformers import AutoTokenizer
+    TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    TRANSFORMERS_AVAILABLE = False
+    print("Warning: transformers not available - token counting will be disabled")
 
 
 # Setup
@@ -16,18 +36,43 @@ TARGET_CONTEXT_LIMIT = 125000  # 7k buffer for reply + overhead
 
 os.makedirs(INPUT_PATH, exist_ok=True)
 os.makedirs(OUTPUT_PATH, exist_ok=True)
-memory = init_memory()
 
+# Initialize components conditionally
+memory = None
+if MEMORY_AVAILABLE:
+    try:
+        memory = init_memory()
+    except Exception as e:
+        print(f"Warning: Failed to initialize memory: {e}")
+        memory = None
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s: %(message)s')
 load_dotenv()
-client = SarvamAI(api_subscription_key=os.environ.get("SARVAM_API_KEY"))
-from transformers import AutoTokenizer
 
-tokenizer = AutoTokenizer.from_pretrained("mistralai/Mistral-Small-24B-Instruct-2501")
+# Initialize SarvamAI client conditionally
+client = None
+if SARVAM_AVAILABLE:
+    try:
+        client = SarvamAI(api_subscription_key=os.environ.get("SARVAM_API_KEY"))
+    except Exception as e:
+        print(f"Warning: Failed to initialize SarvamAI client: {e}")
+        client = None
+
+# Initialize tokenizer conditionally
+tokenizer = None
+if TRANSFORMERS_AVAILABLE:
+    try:
+        tokenizer = AutoTokenizer.from_pretrained("mistralai/Mistral-Small-24B-Instruct-2501")
+    except Exception as e:
+        print(f"Warning: Failed to initialize tokenizer: {e}")
+        tokenizer = None
 
 def count_tokens(text: str) -> int:
-    return len(tokenizer.encode(text, add_special_tokens=False))
+    if tokenizer:
+        return len(tokenizer.encode(text, add_special_tokens=False))
+    else:
+        # Fallback: approximate token count (roughly 4 characters per token)
+        return len(text) // 4
 
 def count_message_tokens(messages):
     return sum(count_tokens(msg["content"]) for msg in messages)
@@ -63,6 +108,10 @@ If the user switches the speaking language, you should adapt to their language. 
 
 
 def transcribe_audio(filepath):
+    if not client:
+        logging.error("SarvamAI client not available for transcription")
+        return {"transcript": "Unable to transcribe audio - AI service unavailable", "language_code": "en-IN"}
+    
     try:
         with open(filepath, "rb") as f:
             response = client.speech_to_text.transcribe(file=f, model="saarika:v2.5")
@@ -73,14 +122,24 @@ def transcribe_audio(filepath):
 
 
 def query_llm(conversation, user_input):
+    if not client:
+        logging.error("SarvamAI client not available for LLM query")
+        return "I'm sorry, but our AI service is currently unavailable. Please try again later.", conversation
+        
     conversation.append({"role": "user", "content": user_input})
     try:
-        relevant_memories = memory.search(user_input, limit=3, user_id="default")  # fixed typo: defualt → default
-        memories_str = "\n".join(f"- {entry['memory']}" for entry in relevant_memories["results"])
+        memories_str = ""
+        if memory:
+            try:
+                relevant_memories = memory.search(user_input, limit=3, user_id="default")
+                memories_str = "\n".join(f"- {entry['memory']}" for entry in relevant_memories["results"])
 
-        logging.info("Retrieved Memories:")
-        for idx, entry in enumerate(relevant_memories["results"]):
-            logging.info(f"{idx+1}. {entry['memory']}")
+                logging.info("Retrieved Memories:")
+                for idx, entry in enumerate(relevant_memories["results"]):
+                    logging.info(f"{idx+1}. {entry['memory']}")
+            except Exception as e:
+                logging.warning(f"Memory search failed: {e}")
+                memories_str = "No memories available"
 
         system_msg = {
             "role": "system",
@@ -105,8 +164,11 @@ def query_llm(conversation, user_input):
         conversation.append({"role": "assistant", "content": reply})
 
         # update only alternatively to prevent latency
-        if len(full_context)%2 ==0 :
-            memory.add(conversation, user_id="default")
+        if memory and len(full_context) % 2 == 0:
+            try:
+                memory.add(conversation, user_id="default")
+            except Exception as e:
+                logging.warning(f"Memory update failed: {e}")
 
         return reply, conversation
 
@@ -115,6 +177,10 @@ def query_llm(conversation, user_input):
         return "I'm here to help. Please try again.", conversation
     
 def identify_language(text):
+    if not client:
+        logging.warning("SarvamAI client not available for language identification")
+        return "en"
+    
     try:
         res = client.text.identify_language(input=text)
         return json.loads(res.json()).get("language_code", "en")
@@ -124,6 +190,12 @@ def identify_language(text):
 
 def convert_to_audio_and_save(lang_code_from_speech, text, save_path):
     """Convert text to audio and save to specified path"""
+    if not client:
+        logging.error("SarvamAI client not available for text-to-speech")
+        # Create a simple error audio file or use a fallback
+        print(f"ERROR: Cannot convert text to audio - AI service unavailable")
+        return
+        
     language_code = identify_language(text) or lang_code_from_speech
     try:
         # print(f"Converting text to audio: '{text[:100]}...' (language: {language_code})")
@@ -141,7 +213,11 @@ def convert_to_audio_and_save(lang_code_from_speech, text, save_path):
         )
         
         # print(f"Sarvam TTS conversion completed, saving to: {save_path}")
-        save(raw_audio_response, save_path)
+        if SARVAM_AVAILABLE:
+            save(raw_audio_response, save_path)
+        else:
+            logging.error("sarvamai.play.save not available")
+            return
         
         # Verify the file was created
         if os.path.exists(save_path):
@@ -157,6 +233,10 @@ def convert_to_audio_and_save(lang_code_from_speech, text, save_path):
         raise
 
 def conversation_should_end(response: str):
+    """Check if the conversation should end based on AI response"""
+    if not response or not isinstance(response, str):
+        return False
+    
     # Primary end signal as instructed in system prompt
     if "<end conversation>" in response.lower():
         return True
@@ -166,14 +246,23 @@ def conversation_should_end(response: str):
         "goodbye", "bye", "farewell", "take care", 
         "we are here for you", "reach out anytime",
         "feel free to call", "thank you for calling",
-        "stay safe", "wishing you well"
+        "stay safe", "wishing you well", "call us back",
+        "i hope you feel better", "you're going to be okay"
     ]
     
     response_lower = response.lower()
     # Look for end phrases near the end of the response (last 100 characters)
     response_end = response_lower[-100:] if len(response_lower) > 100 else response_lower
     
-    return any(phrase in response_end for phrase in end_phrases)
+    # Check for end phrases at the end of the response
+    has_end_phrase = any(phrase in response_end for phrase in end_phrases)
+    
+    # Additional check: if response contains gratitude/closure language together
+    closure_indicators = ["thank you", "grateful", "helped me", "feel better", "much better"]
+    has_closure = any(indicator in response_lower for indicator in closure_indicators)
+    
+    # End if we have explicit end phrases or strong closure indicators at the end
+    return has_end_phrase or (has_closure and len(response.strip()) < 200)
 
 
     
@@ -264,6 +353,8 @@ def process_single_audio_input(input_audio_path, output_audio_path, conversation
             
         except Exception as e:
             logging.warning(f"Audio transcription failed or skipped: {e}")
+            # Check if this might be due to short audio
+            is_short = "too short" in str(e).lower() or "insufficient" in str(e).lower() or "silence" in str(e).lower()
             return {
                 "success": False,
                 "error": f"Audio transcription failed: {str(e)}",
@@ -271,21 +362,23 @@ def process_single_audio_input(input_audio_path, output_audio_path, conversation
                 "response_text": "",
                 "language_code": "en-IN",
                 "conversation_history": conversation_history,
-                "should_end": False
+                "should_end": False,
+                "is_short_audio": is_short  # Flag if this appears to be short audio
             }
         
         logging.info(f"Transcript: {transcribed_text} | Lang: {language_code}")
         
         if not transcribed_text:
-            logging.warning("No transcript found.")
+            logging.warning("No transcript found - audio too short or silent.")
             return {
                 "success": False,
-                "error": "No transcription available",
+                "error": "No transcription available - audio too short",
                 "transcription": "",
                 "response_text": "",
                 "language_code": language_code,
                 "conversation_history": conversation_history,
-                "should_end": False
+                "should_end": False,
+                "is_short_audio": True  # Special flag to indicate we should beep and record again
             }
         
         logging.info(f"Step 2: Getting LLM response...")
@@ -308,7 +401,9 @@ def process_single_audio_input(input_audio_path, output_audio_path, conversation
         # Check if conversation should end (using the logic from simulate_conversation)
         should_end_conversation = conversation_should_end(text_response)
         if should_end_conversation:
-            logging.info("Assistant ended the conversation.")
+            logging.info(f"Conversation should end. Response: '{text_response[:100]}...'")
+        else:
+            logging.info("Conversation continues...")
         
         result = {
             "success": audio_created,
@@ -336,4 +431,3 @@ def process_single_audio_input(input_audio_path, output_audio_path, conversation
             "conversation_history": conversation_history or [],
             "should_end": False
         }
-

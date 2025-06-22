@@ -424,12 +424,28 @@ class TwilioVoiceService:
             if isinstance(ai_response, dict):
                 response_audio_url = ai_response.get("url")
                 should_end = ai_response.get("should_end", False)
+                is_short_audio = ai_response.get("is_short_audio", False)
             else:
                 # Backward compatibility with old format
                 response_audio_url = ai_response
                 should_end = False
+                is_short_audio = False
             
-            if response_audio_url:
+            # Check if this was short audio that couldn't be transcribed
+            if is_short_audio:
+                print(f"Audio too short for transcription - beeping and recording again for call {call_id}")
+                # Don't play any response, just beep and record again
+                response.record(
+                    action=f'/twilio/recording/{call.id}/',
+                    method='POST',
+                    max_length=30,
+                    timeout=3,
+                    play_beep=True,  # Beep to indicate we're ready to listen again
+                    trim='trim-silence',
+                    recording_status_callback=f'/twilio/recording-status/{call.id}/',
+                    recording_status_callback_method='POST'
+                )
+            elif response_audio_url:
                 # Update recording chunk with response info
                 if recording_chunk:
                     recording_chunk.response_audio_url = response_audio_url
@@ -450,8 +466,9 @@ class TwilioVoiceService:
                     print(f"AI indicated conversation should end for call {call_id}")
                     # End the call and mark as completed
                     self._end_call_and_mark_completed(call_id, call_sid)
-                    # Return hangup response
+                    # Return hangup response immediately - don't add any more instructions
                     response.hangup()
+                    return HttpResponse(str(response), content_type='text/xml')
                 else:
                     # After playing response, start recording again for continuous conversation
                     response.record(
@@ -470,6 +487,7 @@ class TwilioVoiceService:
                     print(f"AI indicated conversation should end (no audio response) for call {call_id}")
                     self._end_call_and_mark_completed(call_id, call_sid)
                     response.hangup()
+                    return HttpResponse(str(response), content_type='text/xml')
                 else:
                     # If no response available (could be AI decided not to respond to silence), continue recording anyway
                     print(f"No AI response available, continuing to listen...")
@@ -523,10 +541,10 @@ class TwilioVoiceService:
                 # print(f"=== Download result: {local_audio_path} ===")
                 if not local_audio_path:
                     # print(f"FALLBACK TRIGGERED: Failed to download audio for call {call_id}")
-                    return {"url": self._get_fallback_response(), "should_end": False}
+                    return {"url": self._get_fallback_response(), "should_end": False, "is_short_audio": False}
             else:
                 print(f"FALLBACK TRIGGERED: No recording URL provided for call {call_id}")
-                return {"url": self._get_fallback_response(), "should_end": False}
+                return {"url": self._get_fallback_response(), "should_end": False, "is_short_audio": False}
             
             # Process with Sarvam AI
             # print(f"=== Starting Sarvam AI processing ===")
@@ -550,21 +568,23 @@ class TwilioVoiceService:
                     print(f"FALLBACK TRIGGERED: Failed to save response to media for call {call_id}")
                     # Even if we can't save the response, still check if conversation should end
                     should_end = sarvam_result.get("should_end", False)
-                    return {"url": self._get_fallback_response(), "should_end": should_end}
+                    is_short_audio = sarvam_result.get("is_short_audio", False)
+                    return {"url": self._get_fallback_response(), "should_end": should_end, "is_short_audio": is_short_audio}
             else:
                 print(f"Sarvam AI processing failed for call {call_id}")
                 response_path = sarvam_result.get("path") if sarvam_result else None
                 # print(f"Response path: {response_path}")
                 # print(f"Path exists: {os.path.exists(response_path) if response_path else 'N/A'}")
-                # Even if processing failed, check if conversation should end
+                # Check if this is due to short audio and if conversation should end
+                is_short_audio = sarvam_result.get("is_short_audio", False) if sarvam_result else False
                 should_end = sarvam_result.get("should_end", False) if sarvam_result else False
-                return {"url": self._get_fallback_response(), "should_end": should_end}
+                return {"url": self._get_fallback_response() if not is_short_audio else None, "should_end": should_end, "is_short_audio": is_short_audio}
                 
         except Exception as e:
             print(f"Error processing audio with Sarvam AI: {e}")
             import traceback
             traceback.print_exc()
-            return {"url": self._get_fallback_response(), "should_end": False}
+            return {"url": self._get_fallback_response(), "should_end": False, "is_short_audio": False}
     
     def _download_audio_for_processing(self, recording_url, call_id):
         """Download audio from Twilio for Sarvam AI processing"""
@@ -662,15 +682,19 @@ class TwilioVoiceService:
                 
                 # Check if conversation should end
                 if result["should_end"]:
-                    print(f"Conversation ending for call {call_id}")
+                    print(f"Conversation ending for call {call_id}. Response text: '{result.get('response_text', '')[:100]}...'")
                     return {"path": response_path, "should_end": True}
+                else:
+                    print(f"Conversation continues for call {call_id}")
                 
                 return {"path": response_path, "should_end": False}
             else:
                 print(f"Sarvam AI processing failed for call {call_id}: {result.get('error', 'Unknown error')}")
+                # Check if this is due to short audio
+                is_short_audio = result.get("is_short_audio", False) if result else False
                 # Even if processing failed, check if conversation should end based on the result
                 should_end = result.get("should_end", False) if result else False
-                return {"path": None, "should_end": should_end}
+                return {"path": None, "should_end": should_end, "is_short_audio": is_short_audio}
                 
         except Exception as e:
             print(f"Error processing with Sarvam AI: {e}")
@@ -929,11 +953,12 @@ class TwilioVoiceService:
             
             print(f"Call {call_id} marked as completed")
             
-            # End the Twilio call
+            # End the Twilio call by hanging up
             if call_sid and hasattr(self, 'client'):
                 try:
+                    # Use update to hang up the call
                     self.client.calls(call_sid).update(status='completed')
-                    # print(f"Twilio call {call_sid} ended successfully")
+                    print(f"Twilio call {call_sid} ended successfully")
                 except Exception as e:
                     print(f"Error ending Twilio call {call_sid}: {e}")
                     # Continue anyway since the database is updated
@@ -941,12 +966,12 @@ class TwilioVoiceService:
             # Clean up tracking
             if call_sid in self.active_calls:
                 del self.active_calls[call_sid]
-                # print(f"Removed call {call_sid} from active calls tracking")
+                print(f"Removed call {call_sid} from active calls tracking")
                 
             return True
             
         except Call.DoesNotExist:
-            # print(f"Call {call_id} not found in database")
+            print(f"Call {call_id} not found in database")
             return False
         except Exception as e:
             # print(f"Error ending call {call_id}: {e}")
@@ -1362,4 +1387,3 @@ def get_recording_for_processing(recording_url_or_call_id, prefer_local=True):
     except Exception as e:
         # print(f"Error getting recording for processing: {e}")
         return None
-

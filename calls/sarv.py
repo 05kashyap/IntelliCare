@@ -5,24 +5,24 @@ from dotenv import load_dotenv
 from sarvamai import SarvamAI
 from sarvamai.play import save
 from .memory_integration import init_memory
+from .guard_rails import guard_1, guard_2
+from transformers import AutoTokenizer
+
+
 
 
 # Setup
 SAMPLING_RATE = 16000
-INPUT_PATH = "audio_files/input/"
-OUTPUT_PATH = "audio_files/output/"
 MAX_TOKENS = 132000
 TARGET_CONTEXT_LIMIT = 125000  # 7k buffer for reply + overhead
+DEFAULT_AUDIO_FILE= "../outputs/default_audio.wav"
 
-os.makedirs(INPUT_PATH, exist_ok=True)
-os.makedirs(OUTPUT_PATH, exist_ok=True)
 memory = init_memory()
 
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s: %(message)s')
 load_dotenv()
 client = SarvamAI(api_subscription_key=os.environ.get("SARVAM_API_KEY"))
-from transformers import AutoTokenizer
 
 tokenizer = AutoTokenizer.from_pretrained("mistralai/Mistral-Small-24B-Instruct-2501")
 
@@ -176,47 +176,6 @@ def conversation_should_end(response: str):
     return any(phrase in response_end for phrase in end_phrases)
 
 
-    
-# def simulate_conversation(input_audio_path, output_audio_path):
-#     """
-#     Simulate conversation with given input and output paths
-#     """
-#     # Initialize messages with system prompt (handled outside query_llm like in code 1)
-#     messages = []  # Don't include system prompt here, it's handled inside query_llm
-    
-#     max_turns = 20
-    
-#     for i in range(max_turns):
-#         logging.info(f"--- Turn {i+1} ---")
-        
-#         # Get user input through voice transcription
-#         try:
-#             user_response = json.loads(transcribe_audio(input_audio_path).json())
-#             language_code = user_response.get("language_code", "en-IN")
-#             transcribed_text = user_response.get("transcript", "").strip()
-#         except Exception as e:
-#             logging.warning(f"Audio transcription failed or skipped: {e}")
-#             continue
-            
-#         # Check if transcript is valid
-#         if not transcribed_text:
-#             logging.warning("No transcript found.")
-#             continue
-            
-#         logging.info(f"Transcript: {transcribed_text} | Lang: {language_code}")
-        
-#         # Get LLM response
-#         text_response, messages = query_llm(messages, transcribed_text)
-#         logging.info(f"Assistant reply: {text_response}")
-        
-#         # Convert to audio output
-#         convert_to_audio_and_save(language_code, text_response, output_audio_path)
-        
-#         # Check if conversation should end (using the logic from code 1)
-#         if conversation_should_end(text_response):
-#             logging.info("Assistant ended the conversation.")
-#             break
-
 def process_single_audio_input(input_audio_path, output_audio_path, conversation_history=None):
     """
     Process a single audio input and generate response
@@ -243,7 +202,7 @@ def process_single_audio_input(input_audio_path, output_audio_path, conversation
                 "error": error_msg,
                 "transcription": "",
                 "response_text": "",
-                "language_code": "hi-IN",
+                "language_code": "en-IN",
                 "conversation_history": conversation_history or [],
                 "should_end": False
             }
@@ -256,9 +215,7 @@ def process_single_audio_input(input_audio_path, output_audio_path, conversation
         
         # Step 1: Transcribe input audio
         try:
-            transcription_response = transcribe_audio(input_audio_path)
-            user_response = transcription_response
-            
+            user_response = transcribe_audio(input_audio_path)            
             language_code = user_response.get("language_code", "en-IN")  # Changed default to match simulate_conversation
             transcribed_text = user_response.get("transcript", "").strip()
             
@@ -274,7 +231,25 @@ def process_single_audio_input(input_audio_path, output_audio_path, conversation
                 "should_end": False
             }
         
-        logging.info(f"Transcript: {transcribed_text} | Lang: {language_code}")
+        if transcribed_text:
+            
+            logging.info(f"Transcript: {transcribed_text} | Lang: {language_code}")
+            
+            # guardrail 1 - harassmennt from user
+            try:
+                guard_1.validate(transcribed_text)
+            except Exception as e:
+                logging.info("POTENTIALLY HARMFUL CONTENT DETECTED FROM USER. ENDING CONVERSATION IMMEDIATELY")
+                return {
+                    "success": False,
+                    "error": "We are sorry but this call is ending due to a policy violation, if you are in crisis, or need help, please reach out to a trained professional or a local helpline",
+                    "transcription": "",
+                    "response_text": "",
+                    "language_code": language_code,
+                    "conversation_history": conversation_history,
+                    "should_end": True
+                }
+        
         
         if not transcribed_text:
             logging.warning("No transcript found.")
@@ -291,7 +266,22 @@ def process_single_audio_input(input_audio_path, output_audio_path, conversation
         logging.info(f"Step 2: Getting LLM response...")
         # Step 2: Get LLM response
         text_response, updated_conversation = query_llm(conversation_history, transcribed_text)
-        logging.info(f"Assistant reply: {text_response}")
+        logging.info(f"Assistant reply RAW: {text_response}")
+        
+        # guardrail 2 - harmful content detection
+        try:
+            logging.info(guard_2.validate(text_response))
+        except Exception as e:
+            logging.info("POTENTIALLY HARMFUL CONTENT DETECTED FROM AGENT. ENDING CONVERSATION IMMEDIATELY")
+            return {
+                "success": False,
+                "transcription": "We are sorry but this call is ending due to a policy violation, if you are in crisis, or need help, please reach out to a trained professional or a local helpline",
+                "response_text": text_response,
+                "language_code": language_code,
+                "conversation_history": updated_conversation,
+                "should_end": True,
+            }
+
         
         logging.info(f"Step 3: Converting to audio...")
         # Step 3: Convert response to audio

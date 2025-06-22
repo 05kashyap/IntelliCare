@@ -390,15 +390,15 @@ def start_guard_rails_background(user_input, assistant_response):
             daemon=True
         )
         
-        assistant_thread = threading.Thread(
-            target=validate_with_guard_background,
-            args=(guard_2, assistant_response, "Assistant Guard (No Dangerous Content)"),
-            daemon=True
-        )
+        # assistant_thread = threading.Thread(
+        #     target=validate_with_guard_background,
+        #     args=(guard_2, assistant_response, "Assistant Guard (No Dangerous Content)"),
+        #     daemon=True
+        # )
         
         # Start both threads and return immediately
         user_thread.start()
-        assistant_thread.start()
+        # assistant_thread.start()
         
         logging.info("Background guard rail validation started")
         

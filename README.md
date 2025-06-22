@@ -6,7 +6,7 @@ A Django-based backend system for managing a suicide prevention hotline with AI 
 
 ## System Architecture
 
-![image1](image1)
+![image1](methodology.jpg)
 
 The system integrates the following major components:
 - **Twilio API** for telephony, call recording, and playback.

@@ -6,6 +6,13 @@
 
 Refer to the system diagram for a full overview of the data flow and system architecture.
 
+Ph. No: +1 618-437-8441
+
+Demo Videos: 
+- [English](https://youtu.be/ntUb1JCfGp4)
+- [Kannada](https://youtu.be/k7mdd4o7Vs0)
+- [Telugu](https://youtu.be/oThLcgyCldg)
+
 ---
 ![image](https://github.com/user-attachments/assets/515f716a-1670-4afc-bcf5-dbac282d4317)
 ## 🌐 Key Features
@@ -151,6 +158,9 @@ Refer to the system diagram for a full overview of the data flow and system arch
 ## Limitations
 * Latency. Although we achieve good latency for the amount of processesing we run on speech and language, latency needs to be reduced to achieve a human-like performance.
 * Voice Modulation. The APIs we have used currently are well suited for TTS tasks but do not focus too much on real human-like voice modulations while speaking.
+
+## Demos
+
 
 
 

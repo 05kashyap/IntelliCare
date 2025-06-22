@@ -1,11 +1,13 @@
 import os
 import json
 import logging
+import threading
+import time
 from dotenv import load_dotenv
 from sarvamai import SarvamAI
 from sarvamai.play import save
 from .memory_integration import init_memory
-
+from transformers import AutoTokenizer
 
 # Setup
 SAMPLING_RATE = 16000
@@ -23,6 +25,25 @@ logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s: %(m
 load_dotenv()
 client = SarvamAI(api_subscription_key=os.environ.get("SARVAM_API_KEY"))
 from transformers import AutoTokenizer
+
+from guardrails.hub import ShieldGemma2B
+from guardrails import Guard, OnFailAction
+
+guard_1 = Guard().use(
+    ShieldGemma2B, 
+    policies=[ShieldGemma2B.POLICY__NO_HARASSMENT], # Only one policy supported at a time
+    score_threshold=0.5,
+    on_fail=OnFailAction.NOOP
+)
+
+guard_2 = Guard().use(
+    ShieldGemma2B,
+    policies=[ShieldGemma2B.POLICY__NO_DANGEROUS_CONTENT],
+    score_threshold=0.5,
+    on_fail=OnFailAction.NOOP
+    
+)
+
 
 tokenizer = AutoTokenizer.from_pretrained("mistralai/Mistral-Small-24B-Instruct-2501")
 
@@ -137,7 +158,8 @@ def convert_to_audio_and_save(lang_code_from_speech, text, save_path):
             text=text,
             model="bulbul:v2",
             speaker="anushka",
-            enable_preprocessing=True
+            enable_preprocessing=True,
+            speech_sample_rate=SAMPLING_RATE
         )
         
         # print(f"Sarvam TTS conversion completed, saving to: {save_path}")
@@ -243,7 +265,7 @@ def process_single_audio_input(input_audio_path, output_audio_path, conversation
                 "error": error_msg,
                 "transcription": "",
                 "response_text": "",
-                "language_code": "hi-IN",
+                "language_code": "en-IN",
                 "conversation_history": conversation_history or [],
                 "should_end": False
             }
@@ -289,12 +311,16 @@ def process_single_audio_input(input_audio_path, output_audio_path, conversation
             }
         
         logging.info(f"Step 2: Getting LLM response...")
-        # Step 2: Get LLM response
+        # Step 2: Get LLM response (this runs first and is not blocked by guard rails)
         text_response, updated_conversation = query_llm(conversation_history, transcribed_text)
         logging.info(f"Assistant reply: {text_response}")
         
-        logging.info(f"Step 3: Converting to audio...")
-        # Step 3: Convert response to audio
+        # Step 3: Start guard rails in background threads - completely non-blocking
+        logging.info(f"Step 3: Starting background guard rail validation...")
+        start_guard_rails_background(transcribed_text, text_response)
+        
+        logging.info(f"Step 4: Converting to audio...")
+        # Step 4: Convert response to audio
         convert_to_audio_and_save(language_code, text_response, output_audio_path)
         
         # Check if audio file was created
@@ -336,4 +362,47 @@ def process_single_audio_input(input_audio_path, output_audio_path, conversation
             "conversation_history": conversation_history or [],
             "should_end": False
         }
+
+# Threading-based guard rail validation functions that don't interfere with application flow
+def validate_with_guard_background(guard, text, guard_name):
+    """
+    Validate text with guard in a background thread - completely non-blocking
+    This function runs in the background and only logs results without affecting the main flow
+    """
+    try:
+        # Run the guard validation synchronously in this thread
+        guard.validate(text)
+        logging.info(f"{guard_name} validation passed - no violations detected")
+    except Exception as e:
+        logging.warning(f"{guard_name} detected potential violation: {str(e)}")
+        # Note: We don't take any action here, just log for monitoring purposes
+
+def start_guard_rails_background(user_input, assistant_response):
+    """
+    Start guard rails validation in background threads - completely non-blocking
+    This function starts the threads and returns immediately without waiting
+    """
+    try:
+        # Create and start background threads - these are daemon threads that won't block the application
+        user_thread = threading.Thread(
+            target=validate_with_guard_background,
+            args=(guard_1, user_input, "User Guard (No Harassment)"),
+            daemon=True
+        )
+        
+        assistant_thread = threading.Thread(
+            target=validate_with_guard_background,
+            args=(guard_2, assistant_response, "Assistant Guard (No Dangerous Content)"),
+            daemon=True
+        )
+        
+        # Start both threads and return immediately
+        user_thread.start()
+        assistant_thread.start()
+        
+        logging.info("Background guard rail validation started")
+        
+    except Exception as e:
+        logging.warning(f"Failed to start background guard rails: {e}")
+        # If guard rails fail to start, we continue with the application flow
 

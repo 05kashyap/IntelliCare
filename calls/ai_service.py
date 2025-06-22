@@ -553,7 +553,6 @@ class TwilioVoiceService:
                     return {"url": self._get_fallback_response(), "should_end": should_end}
             else:
                 print(f"Sarvam AI processing failed for call {call_id}")
-                response_path = sarvam_result.get("path") if sarvam_result else None
                 # print(f"Response path: {response_path}")
                 # print(f"Path exists: {os.path.exists(response_path) if response_path else 'N/A'}")
                 # Even if processing failed, check if conversation should end

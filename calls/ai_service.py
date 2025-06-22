@@ -16,8 +16,9 @@ from django.views.decorators.http import require_http_methods
 from django.utils import timezone
 from twilio.twiml.voice_response import VoiceResponse
 from twilio.rest import Client
-from .models import Call
+from .models import Call, RecordingChunk
 from .sarv import system_prompt
+from .risk_assessment import process_chunk_risk_assessment
 from datetime import datetime, timedelta
 
 class LocalRecordingStorage:
@@ -655,6 +656,9 @@ class TwilioVoiceService:
                 # Save updated conversation state
                 self._save_conversation_state(call_id, result["conversation_history"])
                 
+                # Update recording chunk with transcription and trigger risk assessment
+                self._update_chunk_transcription(call_id, result.get("transcription", ""))
+                
                 print(f"Sarvam AI processing successful for call {call_id}")
                 # print(f"Transcription: {result['transcription']}")
                 # print(f"Response: {result['response_text']}")
@@ -952,7 +956,34 @@ class TwilioVoiceService:
             import traceback
             traceback.print_exc()
             return False
-
+    
+    def _update_chunk_transcription(self, call_id, transcription):
+        """Update the latest recording chunk with transcription and trigger risk assessment"""
+        try:
+            call = Call.objects.get(id=call_id)
+            
+            # Get the latest recording chunk
+            latest_chunk = call.recording_chunks.order_by('-chunk_number').first()
+            
+            if latest_chunk and transcription:
+                # Update chunk with transcription
+                latest_chunk.transcription = transcription
+                latest_chunk.save()
+                
+                print(f"Updated chunk {latest_chunk.chunk_number} with transcription for call {call_id}")
+                
+                # Trigger risk assessment in background
+                process_chunk_risk_assessment(latest_chunk.id)
+                
+            elif not latest_chunk:
+                print(f"No recording chunks found for call {call_id}")
+            else:
+                print(f"No transcription to update for call {call_id}")
+                
+        except Call.DoesNotExist:
+            print(f"Call {call_id} not found when updating chunk transcription")
+        except Exception as e:
+            print(f"Error updating chunk transcription for call {call_id}: {e}")
 
 # Webhook view functions for Twilio
 @csrf_exempt

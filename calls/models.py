@@ -13,6 +13,14 @@ class Call(models.Model):
         ('failed', 'Failed'),
     ]
     
+    RISK_LEVEL_CHOICES = [
+        ('no_risk', 'No Risk'),
+        ('low_risk', 'Low Risk'), 
+        ('medium_risk', 'Medium Risk'),
+        ('high_risk', 'High Risk'),
+        ('alert', 'ALERT!'),
+    ]
+    
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     phone_number = models.CharField(max_length=20, help_text="Caller's phone number")
     twilio_call_sid = models.CharField(max_length=100, unique=True, help_text="Twilio Call SID")
@@ -25,6 +33,21 @@ class Call(models.Model):
     local_recording_url = models.CharField(max_length=500, null=True, blank=True, help_text="Local URL to access recording")
     transcription = models.TextField(null=True, blank=True, help_text="Call transcription")
     conversation_state = models.JSONField(null=True, blank=True, help_text="Conversation history for AI processing")
+    
+    # Risk assessment - highest risk detected across all chunks
+    highest_risk_level = models.CharField(
+        max_length=20, 
+        choices=RISK_LEVEL_CHOICES, 
+        null=True, 
+        blank=True,
+        help_text="Highest risk level detected across all recording chunks"
+    )
+    highest_risk_category = models.CharField(
+        max_length=50,
+        null=True,
+        blank=True, 
+        help_text="Risk category that triggered the highest risk level"
+    )
     
     # Location information (if available)
     caller_city = models.CharField(max_length=100, null=True, blank=True)
@@ -195,6 +218,12 @@ class RecordingChunk(models.Model):
     # Chunk metadata
     chunk_number = models.IntegerField(help_text="Order of this chunk in the call")
     duration_seconds = models.FloatField(null=True, blank=True, help_text="Duration of this chunk in seconds")
+    
+    # Transcription and risk assessment
+    transcription = models.TextField(null=True, blank=True, help_text="Transcription of this chunk")
+    risk_category = models.CharField(max_length=50, null=True, blank=True, help_text="Risk category identified in this chunk")
+    risk_level = models.CharField(max_length=20, null=True, blank=True, help_text="Risk level for this chunk")
+    risk_processed = models.BooleanField(default=False, help_text="Whether risk assessment has been completed")
     
     # AI processing
     processed = models.BooleanField(default=False, help_text="Whether this chunk has been processed by AI")

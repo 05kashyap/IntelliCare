@@ -18,6 +18,7 @@ PyJWT==2.10.1
 python-decouple==3.8
 python-dotenv==1.0.0
 requests==2.32.4
+setfit==1.1.0
 sqlparse==0.5.3
 twilio==9.6.3
 urllib3==2.5.0

@@ -56,6 +56,7 @@ class RecordingChunkSerializer(serializers.ModelSerializer):
             'id', 'call', 'recording_url', 'local_recording_path', 
             'local_recording_url', 'chunk_number', 'duration_seconds',
             'processed', 'response_audio_url', 'response_played',
+            'transcription', 'language_code', 'risk_assessment_completed',
             'recorded_at', 'processed_at'
         ]
         read_only_fields = ['id', 'recorded_at', 'processed_at']

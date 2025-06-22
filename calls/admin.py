@@ -333,17 +333,21 @@ class RecordingChunkAdmin(admin.ModelAdmin):
         'chunk_number',
         'processed',
         'response_played',
+        'risk_assessment_completed',
         'duration_seconds',
         'recorded_at'
     )
     list_filter = (
         'processed',
         'response_played',
+        'risk_assessment_completed',
+        'language_code',
         'recorded_at'
     )
     search_fields = (
         'call__phone_number',
-        'call__twilio_call_sid'
+        'call__twilio_call_sid',
+        'transcription'
     )
     readonly_fields = (
         'id',
@@ -365,6 +369,12 @@ class RecordingChunkAdmin(admin.ModelAdmin):
                 ('processed', 'processed_at'),
                 'response_audio_url',
                 'response_played'
+            )
+        }),
+        ('Transcription & Risk Assessment', {
+            'fields': (
+                'transcription',
+                ('language_code', 'risk_assessment_completed')
             )
         }),
         ('Timestamps', {

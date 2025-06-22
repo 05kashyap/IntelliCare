@@ -201,6 +201,11 @@ class RecordingChunk(models.Model):
     response_audio_url = models.URLField(null=True, blank=True, help_text="URL to AI response audio")
     response_played = models.BooleanField(default=False, help_text="Whether AI response was played to caller")
     
+    # Transcription and risk assessment
+    transcription = models.TextField(null=True, blank=True, help_text="Transcription of this audio chunk")
+    language_code = models.CharField(max_length=10, null=True, blank=True, help_text="Language detected in transcription")
+    risk_assessment_completed = models.BooleanField(default=False, help_text="Whether risk assessment has been completed for this chunk")
+    
     # Timestamps
     recorded_at = models.DateTimeField(auto_now_add=True)
     processed_at = models.DateTimeField(null=True, blank=True)

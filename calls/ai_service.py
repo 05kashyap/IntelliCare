@@ -18,6 +18,7 @@ from twilio.twiml.voice_response import VoiceResponse
 from twilio.rest import Client
 from .models import Call
 from .sarv import system_prompt
+from .risk_assessment import assess_risk_async
 from datetime import datetime, timedelta
 
 class LocalRecordingStorage:
@@ -447,7 +448,7 @@ class TwilioVoiceService:
                 
                 # Check if conversation should end
                 if should_end:
-                    print(f"AI indicated conversation should end for call {call_id}")
+                    # print(f"AI indicated conversation should end for call {call_id}")
                     # End the call and mark as completed
                     self._end_call_and_mark_completed(call_id, call_sid)
                     # Return hangup response
@@ -458,31 +459,25 @@ class TwilioVoiceService:
                         action=f'/twilio/recording/{call.id}/',
                         method='POST',
                         max_length=30,
-                        timeout=3,
+                        timeout=3,  # Finish recording after 3 seconds of silence
                         play_beep=True,
                         trim='trim-silence',
                         recording_status_callback=f'/twilio/recording-status/{call.id}/',
                         recording_status_callback_method='POST'
                     )
             else:
-                # If no response available, check if we should still end the call
-                if should_end:
-                    print(f"AI indicated conversation should end (no audio response) for call {call_id}")
-                    self._end_call_and_mark_completed(call_id, call_sid)
-                    response.hangup()
-                else:
-                    # If no response available (could be AI decided not to respond to silence), continue recording anyway
-                    print(f"No AI response available, continuing to listen...")
-                    response.record(
-                        action=f'/twilio/recording/{call.id}/',
-                        method='POST',
-                        max_length=30,
-                        timeout=3,
-                        play_beep=True,
-                        trim='trim-silence',
-                        recording_status_callback=f'/twilio/recording-status/{call.id}/',
-                        recording_status_callback_method='POST'
-                    )
+                # If no response available (could be AI decided not to respond to silence), continue recording anyway
+                # print(f"No AI response available, continuing to listen...")
+                response.record(
+                    action=f'/twilio/recording/{call.id}/',
+                    method='POST',
+                    max_length=30,
+                    timeout=3,  # Finish recording after 3 seconds of silence
+                    play_beep=True,
+                    trim='trim-silence',
+                    recording_status_callback=f'/twilio/recording-status/{call.id}/',
+                    recording_status_callback_method='POST'
+                )
         
         except Call.DoesNotExist:
             # If call not found, just continue recording
@@ -548,17 +543,13 @@ class TwilioVoiceService:
                     return {"url": response_url, "should_end": False}
                 else:
                     print(f"FALLBACK TRIGGERED: Failed to save response to media for call {call_id}")
-                    # Even if we can't save the response, still check if conversation should end
-                    should_end = sarvam_result.get("should_end", False)
-                    return {"url": self._get_fallback_response(), "should_end": should_end}
+                    return {"url": self._get_fallback_response(), "should_end": False}
             else:
                 print(f"Sarvam AI processing failed for call {call_id}")
                 response_path = sarvam_result.get("path") if sarvam_result else None
                 # print(f"Response path: {response_path}")
                 # print(f"Path exists: {os.path.exists(response_path) if response_path else 'N/A'}")
-                # Even if processing failed, check if conversation should end
-                should_end = sarvam_result.get("should_end", False) if sarvam_result else False
-                return {"url": self._get_fallback_response(), "should_end": should_end}
+                return {"url": self._get_fallback_response(), "should_end": False}
                 
         except Exception as e:
             print(f"Error processing audio with Sarvam AI: {e}")
@@ -656,6 +647,9 @@ class TwilioVoiceService:
                 # Save updated conversation state
                 self._save_conversation_state(call_id, result["conversation_history"])
                 
+                # Store transcription in the recording chunk and trigger risk assessment
+                self._store_transcription_and_assess_risk(call_id, result)
+                
                 print(f"Sarvam AI processing successful for call {call_id}")
                 # print(f"Transcription: {result['transcription']}")
                 # print(f"Response: {result['response_text']}")
@@ -668,9 +662,8 @@ class TwilioVoiceService:
                 return {"path": response_path, "should_end": False}
             else:
                 print(f"Sarvam AI processing failed for call {call_id}: {result.get('error', 'Unknown error')}")
-                # Even if processing failed, check if conversation should end based on the result
-                should_end = result.get("should_end", False) if result else False
-                return {"path": None, "should_end": should_end}
+                # Return None to trigger fallback response
+                return {"path": None, "should_end": False}
                 
         except Exception as e:
             print(f"Error processing with Sarvam AI: {e}")
@@ -723,199 +716,38 @@ class TwilioVoiceService:
         except Exception as e:
             print(f"Error saving conversation state: {e}")
     
-    def _wait_for_file_creation(self, file_path, timeout=30, poll_interval=0.5):
-        """
-        Wait for a file to be created, with timeout
-        Returns True if file is created, False if timeout reached
-        """
-        # print(f"Waiting for file creation: {file_path} (timeout: {timeout}s)")
-        start_time = time.time()
-        
-        while time.time() - start_time < timeout:
-            if os.path.exists(file_path):
-                # File exists, but let's also check if it has content
-                try:
-                    file_size = os.path.getsize(file_path)
-                    if file_size > 0:
-                        # print(f"File created successfully: {file_path} (size: {file_size} bytes, waited: {time.time() - start_time:.1f}s)")
-                        return True
-                    else:
-                        pass
-                        # File exists but is empty, wait a bit more
-                        # print(f"File exists but is empty, waiting... ({time.time() - start_time:.1f}s)")
-                except OSError:
-                    # File might be being written to, wait a bit more
-                    pass
-            
-            time.sleep(poll_interval)
-        
-        # print(f"Timeout waiting for file creation: {file_path} (waited: {timeout}s)")
-        return False
-    
-    def _save_response_to_media(self, response_path, call_id):
-        """Save response audio to media/outputs directory and return URL"""
+    def _store_transcription_and_assess_risk(self, call_id, sarvam_result):
+        """Store transcription in the recording chunk and trigger async risk assessment"""
         try:
-            # print(f"Saving response to media for call {call_id}")
-            # print(f"Source path: {response_path}")
+            call = Call.objects.get(id=call_id)
             
-            # Verify source file exists
-            if not os.path.exists(response_path):
-                # print(f"ERROR: Source response file does not exist: {response_path}")
-                return None
+            # Get the latest recording chunk for this call
+            latest_chunk = call.recording_chunks.order_by('-chunk_number').first()
             
-            outputs_dir = os.path.join(settings.MEDIA_ROOT, 'outputs')
-            os.makedirs(outputs_dir, exist_ok=True)
-            
-            # Create unique filename for this response with call ID
-            timestamp = timezone.now().strftime('%Y%m%d_%H%M%S')
-            filename = f"response_{timestamp}_{str(call_id)[:8]}.wav"
-            media_path = os.path.join(outputs_dir, filename)
-            
-            # print(f"Destination path: {media_path}")
-            
-            # Copy the file to media directory
-            shutil.copy2(response_path, media_path)
-            
-            # Verify the file was copied successfully
-            if os.path.exists(media_path):
-                file_size = os.path.getsize(media_path)
-                # print(f"File copied successfully to: {media_path} (size: {file_size} bytes)")
+            if latest_chunk and sarvam_result.get('transcription'):
+                # Store transcription data in the chunk
+                latest_chunk.transcription = sarvam_result.get('transcription', '')
+                latest_chunk.language_code = sarvam_result.get('language_code', 'en-IN')
+                latest_chunk.save()
                 
-                # Return the media URL
-                response_url = f"{settings.MEDIA_URL}outputs/{filename}"
-                # print(f"Generated response URL: {response_url}")
-                return response_url
+                print(f"Stored transcription for chunk {latest_chunk.chunk_number} of call {call_id}")
+                
+                # Trigger async risk assessment for this chunk
+                # This will analyze all transcriptions up to this chunk
+                assess_risk_async(str(call_id), latest_chunk.chunk_number)
+                
+                print(f"Triggered risk assessment for call {call_id}, chunk {latest_chunk.chunk_number}")
+                
             else:
-                # print(f"ERROR: File copy failed - destination file not found: {media_path}")
-                return None
-            
+                print(f"Warning: No recording chunk found or no transcription available for call {call_id}")
+                
+        except Call.DoesNotExist:
+            print(f"Error: Call {call_id} not found when storing transcription")
         except Exception as e:
-            # print(f"Error saving response to media: {e}")
+            print(f"Error storing transcription and triggering risk assessment for call {call_id}: {e}")
             import traceback
             traceback.print_exc()
-            return None
-    
-    def _get_fallback_response(self):
-        """Get fallback response when Sarvam AI processing fails"""
-        print("=== USING FALLBACK RESPONSE ===")
-        # print("=== THIS SHOULD ONLY HAPPEN WHEN SARVAM AI FAILS ===")
-        
-        # Check if sample response file exists
-        outputs_dir = os.path.join(settings.MEDIA_ROOT, 'outputs')
-        sample_response = os.path.join(outputs_dir, 'sample_response.wav')
-        
-        if os.path.exists(sample_response):
-            response_url = f"{settings.MEDIA_URL}outputs/sample_response.wav"
-            # print(f"Using existing fallback response: {response_url}")
-            return response_url
-        
-        # If no sample file in media, check the main outputs directory
-        main_outputs_dir = os.path.join(settings.BASE_DIR, 'outputs')
-        main_sample_response = os.path.join(main_outputs_dir, 'sample_response.wav')
-        
-        if os.path.exists(main_sample_response):
-            try:
-                os.makedirs(outputs_dir, exist_ok=True)
-                shutil.copy2(main_sample_response, sample_response)
-                response_url = f"{settings.MEDIA_URL}outputs/sample_response.wav"
-                # print(f"Using fallback response (copied from {main_sample_response}): {response_url}")
-                return response_url
-            except Exception as e:
-                pass
-                # print(f"Error copying fallback file: {e}")
-        
-        # print(f"ERROR: No fallback response available")
-        return None
-    
-    def continue_conversation(self, request, call_id):
-        """Continue conversation - simplified since we handle everything in recording complete"""
-        response = VoiceResponse()
-        
-        # Since we're using continuous recording cycle, just start recording again
-        response.record(
-            action=f'/twilio/recording/{call_id}/',
-            method='POST',
-            max_length=30,
-            timeout=3,  # Finish recording after 3 seconds of silence
-            play_beep=True,
-            trim='trim-silence',
-            recording_status_callback=f'/twilio/recording-status/{call_id}/',
-            recording_status_callback_method='POST'
-        )
-        
-        return HttpResponse(str(response), content_type='text/xml')
-    
-    def handle_user_choice(self, request, call_id):
-        """Handle user's choice to continue or end - simplified for continuous recording"""
-        response = VoiceResponse()
-        
-        # Since we're doing continuous recording, just continue with recording
-        response.record(
-            action=f'/twilio/recording/{call_id}/',
-            method='POST',
-            max_length=30,
-            timeout=3,  # Finish recording after 3 seconds of silence
-            play_beep=True,
-            trim='trim-silence',
-            recording_status_callback=f'/twilio/recording-status/{call_id}/',
-            recording_status_callback_method='POST'
-        )
-        
-        return HttpResponse(str(response), content_type='text/xml')
-    
-    def get_audio_for_processing(self, recording_url):
-        """
-        Extract audio data from Twilio recording URL for further processing
-        Returns audio data that can be sent to AI processing
-        """
-        try:
-            # Use centralized download logic
-            audio_response = local_storage._download_from_twilio(recording_url)
-            
-            if audio_response and audio_response.status_code == 200:
-                # Return audio data for processing
-                return {
-                    'audio_data': audio_response.content,
-                    'audio_url': recording_url,
-                    'content_type': audio_response.headers.get('content-type', 'audio/wav'),
-                    'size': len(audio_response.content)
-                }
-            else:
-                # print(f"Failed to download audio")
-                return None
-                
-        except Exception as e:
-            # print(f"Error downloading audio: {e}")
-            return None
-    
-    def play_audio_to_caller(self, call_sid, audio_file_url):
-        """
-        Play an audio file to the caller during an active call
-        """
-        try:
-            # Update the call to play audio
-            call = self.client.calls(call_sid).update(
-                twiml=f'<Response><Play>{audio_file_url}</Play></Response>'
-            )
-            return True
-        except Exception as e:
-            print(f"Error playing audio to caller: {e}")
-            return False
-    
-    def end_call(self, call_sid):
-        """End an active call"""
-        try:
-            call = self.client.calls(call_sid).update(status='completed')
-            
-            # Clean up tracking
-            if call_sid in self.active_calls:
-                del self.active_calls[call_sid]
-                
-            return True
-        except Exception as e:
-            print(f"Error ending call: {e}")
-            return False
-    
+
     def _end_call_and_mark_completed(self, call_id, call_sid):
         """End the call and mark it as completed in the database"""
         try:

@@ -157,23 +157,9 @@ def convert_to_audio_and_save(lang_code_from_speech, text, save_path):
         raise
 
 def conversation_should_end(response: str):
-    # Primary end signal as instructed in system prompt
-    if "<end conversation>" in response.lower():
-        return True
-    
-    # Additional end signals that indicate natural conversation closure
-    end_phrases = [
-        "goodbye", "bye", "farewell", "take care", 
-        "we are here for you", "reach out anytime",
-        "feel free to call", "thank you for calling",
-        "stay safe", "wishing you well"
-    ]
-    
-    response_lower = response.lower()
-    # Look for end phrases near the end of the response (last 100 characters)
-    response_end = response_lower[-100:] if len(response_lower) > 100 else response_lower
-    
-    return any(phrase in response_end for phrase in end_phrases)
+    return any(phrase in response.lower() for phrase in [
+        "<end conversation>", "take care", "we are here for you", "reach out anytime"
+    ])
 
 
     
@@ -244,8 +230,7 @@ def process_single_audio_input(input_audio_path, output_audio_path, conversation
                 "transcription": "",
                 "response_text": "",
                 "language_code": "hi-IN",
-                "conversation_history": conversation_history or [],
-                "should_end": False
+                "conversation_history": conversation_history or []
             }
         
         # Initialize conversation if not provided (don't include system prompt here, handled inside query_llm)
@@ -270,8 +255,7 @@ def process_single_audio_input(input_audio_path, output_audio_path, conversation
                 "transcription": "",
                 "response_text": "",
                 "language_code": "en-IN",
-                "conversation_history": conversation_history,
-                "should_end": False
+                "conversation_history": conversation_history
             }
         
         logging.info(f"Transcript: {transcribed_text} | Lang: {language_code}")
@@ -284,8 +268,7 @@ def process_single_audio_input(input_audio_path, output_audio_path, conversation
                 "transcription": "",
                 "response_text": "",
                 "language_code": language_code,
-                "conversation_history": conversation_history,
-                "should_end": False
+                "conversation_history": conversation_history
             }
         
         logging.info(f"Step 2: Getting LLM response...")
@@ -316,7 +299,7 @@ def process_single_audio_input(input_audio_path, output_audio_path, conversation
             "response_text": text_response,
             "language_code": language_code,
             "conversation_history": updated_conversation,
-            "should_end": should_end_conversation
+            "should_end": should_end_conversation  # Updated to use conversation_should_end function
         }
         
         logging.info(f"=== Processing complete - Success: {result['success']} ===")
@@ -332,8 +315,7 @@ def process_single_audio_input(input_audio_path, output_audio_path, conversation
             "error": error_msg,
             "transcription": "",
             "response_text": "",
-            "language_code": "en-IN",
-            "conversation_history": conversation_history or [],
-            "should_end": False
+            "language_code": "en-IN",  # Changed default to match simulate_conversation
+            "conversation_history": conversation_history or []
         }
 

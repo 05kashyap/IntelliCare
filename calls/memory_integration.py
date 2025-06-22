@@ -12,10 +12,12 @@ config = {
         }
     },
     "llm": {
-        "provider": "sarvam",
+        "provider": "gemini",
         "config": {
-            "model": "sarvam-m",
+            "model": "gemini-2.5-flash",
             "temperature": 0.2,
+            "max_tokens": 2000,
+            "top_p": 1.0
         }
     },
    "vector_store": {

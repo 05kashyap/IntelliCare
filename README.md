@@ -1,5 +1,5 @@
 # 🏥 Intellicare: Voice-first Mental Health Hotline Agent
-
+![image1](logo.jpg)
 ## Overview
 
 **Intellicare** is a multilingual, voice-based AI assistant engineered specifically for sensitive mental health-related conversations. Unlike text-based agents, Intellicare leverages real-time voice interaction and contextual memory to provide a more human-like, empathetic experience. Designed for high-stakes applications such as suicide hotlines and mental health support, Intellicare combines speech recognition, memory-augmented conversations, advanced safety guardrails, and real-time inference pipelines with sub-10 second latency.
@@ -7,6 +7,7 @@
 Refer to the system diagram for a full overview of the data flow and system architecture.
 
 ---
+![image2](methodology.jpg)
 
 ## 🌐 Key Features
 
@@ -60,7 +61,28 @@ Refer to the system diagram for a full overview of the data flow and system arch
 * Memory is **updated** with the latest conversation turn.
 
 ---
+## Project Structure
 
+```
+IntelliCare/
+├──                           # Main app for call and memory management
+│   ├── models.py                   # Database models (Call, Memory, CallNote, EmergencyContact)
+│   ├── admin.py                    # Admin interface configuration
+│   ├── views.py                    # API views and Twilio webhooks
+│   ├── serializers.py              # Django REST Framework serializers
+│   ├── urls.py                     # URL routing
+│   └── management/commands/        # Management commands
+│       └── create_sample_data.py   # Create sample data for testing
+├── hotline_backend/                # Django project settings
+│   ├── settings.py                 # Main settings
+│   └── urls.py                     # Main URL configuration
+├── requirements.txt                # Python dependencies
+├── .env                            # Environment variables
+└── manage.py                       # Django management script
+```
+
+
+---
 ## ⚙️ Technologies Used
 
 ### Core APIs:
